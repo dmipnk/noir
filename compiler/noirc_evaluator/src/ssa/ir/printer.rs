@@ -21,6 +21,7 @@ use super::{
 impl Display for Ssa {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         let globals = (*self.functions[&self.main_id].dfg.globals).clone();
+        println!("global\n {:?}\n",globals);
         let globals_dfg = DataFlowGraph::from(globals);
 
         for (id, global_value) in globals_dfg.values_iter() {

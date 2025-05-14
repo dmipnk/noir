@@ -7,10 +7,7 @@
 //! This module heavily borrows from Cranelift
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs::File,
-    io::Write,
-    path::{Path, PathBuf},
+    collections::{BTreeMap, BTreeSet}, fs::File, future::poll_fn, io::Write, path::{Path, PathBuf}
 };
 
 use crate::{
@@ -72,6 +69,9 @@ pub struct SsaEvaluatorOptions {
     /// Skip the check for under constrained values
     pub skip_underconstrained_check: bool,
 
+    /// Skip the check for data leakage
+    pub skip_data_leakage_check: bool,
+
     /// Enable the missing Brillig call constraints check
     pub enable_brillig_constraints_check: bool,
 
@@ -100,6 +100,8 @@ pub(crate) fn optimize_into_acir(
     program: Program,
     options: &SsaEvaluatorOptions,
 ) -> Result<ArtifactsAndWarnings, RuntimeError> {
+    println!("signature {:?}",program.function_signatures[0]);
+    let func_sigs = program.function_signatures.clone();
     let ssa_gen_span = span!(Level::TRACE, "ssa_generation");
     let ssa_gen_span_guard = ssa_gen_span.enter();
     let builder = SsaBuilder::new(
@@ -141,6 +143,12 @@ pub(crate) fn optimize_into_acir(
             options.print_codegen_timings,
             || ssa.check_for_underconstrained_values(),
         ));
+    }
+
+    println!("After all:\n{}",ssa);
+
+    if !options.skip_data_leakage_check{
+        ssa.check_for_data_leakage(&func_sigs);
     }
 
     if options.enable_brillig_constraints_check {
@@ -448,6 +456,8 @@ fn split_public_and_private_inputs(
         return (BTreeSet::new(), BTreeSet::new());
     }
 
+    println!("ssa_signature {:?}",func_sig.0);
+
     func_sig
         .0
         .iter()
@@ -468,6 +478,7 @@ fn split_public_and_private_inputs(
                     acc.1.insert(witness);
                 }
             }
+            println!("splited {:?}, {:?}", acc.0,acc.1);
             (acc.0, acc.1)
         })
 }

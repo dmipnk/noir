@@ -1,0 +1,25 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "attach",
+            "name": "Attach",
+            "program": "~/NIR/noir/target/debug/nargo",
+            "waitFor": true
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Launch",
+            "program": "~/NIR/noir/target/debug/nargo",
+            "args": ["compile"],
+            "cwd": "${workspaceFolder}",
+            "sourceLanguages": ["rust"]
+        }
+    ]
+
+}
