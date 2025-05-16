@@ -3,14 +3,14 @@
 //! The compiler informs the developer of these as bugs.
 use crate::errors::{InternalBug, SsaReport};
 use crate::ssa::ir::basic_block::BasicBlockId;
+use crate::ssa::ir::call_stack;
 use crate::ssa::ir::function::{self, RuntimeType};
 use crate::ssa::ir::function::{Function, FunctionId};
 use crate::ssa::ir::instruction::{self, Hint, Instruction, InstructionId, Intrinsic};
 use crate::ssa::ir::value::{self, Value, ValueId};
-use crate::ssa::ir::map::Id;//добавил
 use crate::ssa::ssa_gen::Ssa;
 use crate::ssa::ir::dfg::{DataFlowGraph, GlobalsGraph};
-use acvm::acir::circuit::Program;
+use crate::ssa::ir::map::Id;
 use im::HashMap;
 use noirc_errors::Location;
 use noirc_frontend::ast::Visibility;
@@ -46,15 +46,15 @@ impl Ssa {
         &mut self,
         func_sigs: &Vec<FunctionSignature>,
     ) -> Vec<SsaReport>{
-        println!("signatures in check_for_data_leakage {:?}\n",func_sigs);
-        let m_id = &self.main_id;
+        println!("signatures in check_for_data_leakage dbg print {:?}\n",func_sigs);
+        self.normalize_ids();
         self.functions
             .values()
             .zip(func_sigs)
             .map(|pair| (pair.0.id(),pair.1))
             .flat_map(|fid_sig_pair| {
                 let function_to_process = &self.functions[&fid_sig_pair.0];
-                check_for_data_leakage_within_function(function_to_process, &self.functions,fid_sig_pair.1)//nothing is understandable)
+                check_for_data_leakage_within_function(function_to_process,fid_sig_pair.1)
             })
             .collect()
     }
@@ -92,15 +92,35 @@ impl Ssa {
 
 fn check_for_data_leakage_within_function(
     function: &Function,
-    all_functions: &BTreeMap<FunctionId, Function>,
     func_sig: &FunctionSignature,
 ) -> Vec<SsaReport> {
     let mut context = Context::default();
     let mut warnings: Vec<SsaReport> = Vec::new();
 
-    context.compute_sets_of_connected_value_ids_copy(function, all_functions,func_sig);// просто втупую в один блок
-    println!("context value sets \n {:?}",context.value_sets);
-    return vec![];
+    let tags_map = context.make_tags_map(function, function.entry_block(), func_sig);
+    println!("\ndbg print tags map in function {:?}", tags_map);
+    println!("function returns {:?}\n",function.returns());
+
+    let instructions = function.dfg[function.entry_block()].instructions();
+
+    for ret in function.returns().iter(){
+        if *(tags_map.get(ret).expect("error occured, there is no value in tags map with such id")) == Visibility::Private{
+            for instruction in instructions.iter(){
+                for value_id in function.dfg.instruction_results(*instruction).iter() {
+                    let smth = function.dfg.resolve(*value_id);
+                    if smth == *ret{
+                        warnings.push(SsaReport::Bug(InternalBug::DataLeak {
+                            call_stack: function.dfg.get_instruction_call_stack(
+                                *instruction
+                            ),
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    return warnings;
 }
 
 
@@ -112,8 +132,6 @@ fn check_for_underconstrained_values_within_function(
     let mut context = Context::default();
     let mut warnings: Vec<SsaReport> = Vec::new();
 
-    println!("function\n {}\n",function);
-    println!("dbg function\n {:?}\n",function);
 
     context.compute_sets_of_connected_value_ids(function, all_functions);
 
@@ -712,32 +730,7 @@ impl Context {
             self.connect_value_ids_in_block(function, block, all_functions);
         }
         // Merge ValueIds into sets, where each original small set of ValueIds is merged with another set if they intersect
-        // println!("dbg value sets\n {:?}\n",self.value_sets);
-        // self.value_sets = Self::merge_sets_par(&self.value_sets);
-        // println!("dbg after merge value sets\n {:?}\n",self.value_sets);
-    }
-
-
-    fn compute_sets_of_connected_value_ids_copy(
-        &mut self,
-        function: &Function,
-        all_functions: &BTreeMap<FunctionId, Function>,
-        func_sig: &FunctionSignature,
-    ) {
-        // Go through each block in the function and create a list of sets of ValueIds connected by instructions
-        self.block_queue.push(function.entry_block());
-        while let Some(block) = self.block_queue.pop() {
-            if self.visited_blocks.contains(&block) {
-                continue;
-            }
-            self.visited_blocks.insert(block);
-            self.connect_value_ids_in_block(function, block, all_functions);
-            self.make_tags_map(function, block, all_functions, func_sig);//dopisal need to think about where should i call this function
-        }
-        // Merge ValueIds into sets, where each original small set of ValueIds is merged with another set if they intersect
-        println!("dbg value sets\n {:?}\n",self.value_sets);
         self.value_sets = Self::merge_sets_par(&self.value_sets);
-        println!("dbg after merge value sets\n {:?}\n",self.value_sets);
     }
 
     /// Find sets that contain input or output value of the function
@@ -766,7 +759,6 @@ impl Context {
                 }
             }
         }
-        println!("dbg connected sets indices\n {:?}\n",connected_sets_indices);
         connected_sets_indices
     }
 
@@ -859,15 +851,12 @@ impl Context {
     }
 
     ///add main function arguments in tags_map base on their visibility
-    /// по идее когда я поменяю на итератор, то можно будет просто убрать первые квадратные скобочки
     fn add_main_args_in_tags_map(
         &mut self,
         tags_map: &mut BTreeMap<ValueId,Visibility>,
         func_sig: &FunctionSignature,
         function: &Function,
     ){
-
-        println!("function parametrs testing {:?}", function.parameters());
 
         // how to rename metadata
         for (metadata,id) in (&func_sig.0).into_iter().zip(function.parameters()){
@@ -879,21 +868,16 @@ impl Context {
         &mut self,
         function: &Function,
         block: BasicBlockId,
-        all_functions: &BTreeMap<FunctionId, Function>,
         func_sig: &FunctionSignature,
     ) -> BTreeMap<ValueId, Visibility>{
         let instructions = function.dfg[block].instructions();
-
-        // let globals:GlobalsGraph = (all_functions[main_id].dfg.globals).clone();
-        // println!("global\n {:?}\n",globals);
-        // let globals_dfg = DataFlowGraph::from(globals);
 
         let mut tags:BTreeMap<ValueId, Visibility> = BTreeMap::new();
 
         self.add_main_args_in_tags_map(&mut tags, func_sig,function);
 
-        println!("dbg block\n {:?}\n",block);
-        println!("dbg instructions\n {:?}\n",instructions);
+        println!("dbg print block\n {:?}\n",block);
+        println!("dbg print instructions\n {:?}\n",instructions);
 
         for instruction in instructions.iter() {
             let mut instruction_arguments_and_results = BTreeSet::new();
@@ -907,14 +891,11 @@ impl Context {
                 instruction_arguments_and_results.insert(function.dfg.resolve(*value_id));
             }
 
-            let mut instruction_argumants_and_results_copy = instruction_arguments_and_results.clone();
+            let mut instruction_arguments_and_results_copy = instruction_arguments_and_results.clone();
 
-            self.add_result_tag(function,&function.dfg[*instruction],&mut tags, &mut instruction_argumants_and_results_copy);
+            self.add_result_tag(function,&function.dfg[*instruction],&mut tags, &mut instruction_arguments_and_results_copy);
 
         }
-
-        println!("block {}, tags in block {:?}\n",block,tags);
-        println!("return value id {:?}",function.returns());
 
         tags
 

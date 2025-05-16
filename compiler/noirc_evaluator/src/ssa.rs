@@ -100,7 +100,7 @@ pub(crate) fn optimize_into_acir(
     program: Program,
     options: &SsaEvaluatorOptions,
 ) -> Result<ArtifactsAndWarnings, RuntimeError> {
-    println!("signature {:?}",program.function_signatures[0]);
+    println!("dbg print signature {:?}",program.function_signatures[0]);
     let func_sigs = program.function_signatures.clone();
     let ssa_gen_span = span!(Level::TRACE, "ssa_generation");
     let ssa_gen_span_guard = ssa_gen_span.enter();
@@ -145,10 +145,14 @@ pub(crate) fn optimize_into_acir(
         ));
     }
 
-    println!("After all:\n{}",ssa);
+    println!("ssa dbg print:\n{}",ssa);
 
-    if !options.skip_data_leakage_check{
-        ssa.check_for_data_leakage(&func_sigs);
+    if !options.skip_data_leakage_check {
+        ssa_level_warnings.extend(time(
+            "After Check for Data Leakage",
+            options.print_codegen_timings,
+            || ssa.check_for_data_leakage(&func_sigs),
+        ));
     }
 
     if options.enable_brillig_constraints_check {
@@ -456,8 +460,6 @@ fn split_public_and_private_inputs(
         return (BTreeSet::new(), BTreeSet::new());
     }
 
-    println!("ssa_signature {:?}",func_sig.0);
-
     func_sig
         .0
         .iter()
@@ -478,7 +480,6 @@ fn split_public_and_private_inputs(
                     acc.1.insert(witness);
                 }
             }
-            println!("splited {:?}, {:?}", acc.0,acc.1);
             (acc.0, acc.1)
         })
 }
