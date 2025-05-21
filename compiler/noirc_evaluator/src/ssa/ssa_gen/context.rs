@@ -114,6 +114,8 @@ impl<'a> FunctionContext<'a> {
         shared_context: &'a SharedContext,
         globals: GlobalsGraph,
     ) -> Self {
+
+        println!("function contex new dbg print parametrs {:?}",parameters);
         let function_id = shared_context
             .pop_next_function_in_queue()
             .expect("No function in queue for the FunctionContext to compile")

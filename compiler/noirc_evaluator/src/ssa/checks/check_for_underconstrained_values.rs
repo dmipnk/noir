@@ -3,18 +3,13 @@
 //! The compiler informs the developer of these as bugs.
 use crate::errors::{InternalBug, SsaReport};
 use crate::ssa::ir::basic_block::BasicBlockId;
-use crate::ssa::ir::call_stack;
-use crate::ssa::ir::function::{self, RuntimeType};
+use crate::ssa::ir::function::RuntimeType;
 use crate::ssa::ir::function::{Function, FunctionId};
-use crate::ssa::ir::instruction::{self, Hint, Instruction, InstructionId, Intrinsic};
-use crate::ssa::ir::value::{self, Value, ValueId};
+use crate::ssa::ir::instruction::{Hint, Instruction, InstructionId, Intrinsic};
+use crate::ssa::ir::value::{Value, ValueId};
 use crate::ssa::ssa_gen::Ssa;
-use crate::ssa::ir::dfg::{DataFlowGraph, GlobalsGraph};
-use crate::ssa::ir::map::Id;
 use im::HashMap;
 use noirc_errors::Location;
-use noirc_frontend::ast::Visibility;
-use noirc_frontend::hir_def::function::FunctionSignature;
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use tracing::trace;
@@ -38,23 +33,6 @@ impl Ssa {
                     ),
                     RuntimeType::Brillig(_) => Vec::new(),
                 }
-            })
-            .collect()
-    }
-
-    pub(crate) fn check_for_data_leakage(
-        &mut self,
-        func_sigs: &Vec<FunctionSignature>,
-    ) -> Vec<SsaReport>{
-        println!("signatures in check_for_data_leakage dbg print {:?}\n",func_sigs);
-        self.normalize_ids();
-        self.functions
-            .values()
-            .zip(func_sigs)
-            .map(|pair| (pair.0.id(),pair.1))
-            .flat_map(|fid_sig_pair| {
-                let function_to_process = &self.functions[&fid_sig_pair.0];
-                check_for_data_leakage_within_function(function_to_process,fid_sig_pair.1)
             })
             .collect()
     }
@@ -90,40 +68,6 @@ impl Ssa {
     }
 }
 
-fn check_for_data_leakage_within_function(
-    function: &Function,
-    func_sig: &FunctionSignature,
-) -> Vec<SsaReport> {
-    let mut context = Context::default();
-    let mut warnings: Vec<SsaReport> = Vec::new();
-
-    let tags_map = context.make_tags_map(function, function.entry_block(), func_sig);
-    println!("\ndbg print tags map in function {:?}", tags_map);
-    println!("function returns {:?}\n",function.returns());
-
-    let instructions = function.dfg[function.entry_block()].instructions();
-
-    for ret in function.returns().iter(){
-        if *(tags_map.get(ret).expect("error occured, there is no value in tags map with such id")) == Visibility::Private{
-            for instruction in instructions.iter(){
-                for value_id in function.dfg.instruction_results(*instruction).iter() {
-                    let smth = function.dfg.resolve(*value_id);
-                    if smth == *ret{
-                        warnings.push(SsaReport::Bug(InternalBug::DataLeak {
-                            call_stack: function.dfg.get_instruction_call_stack(
-                                *instruction
-                            ),
-                        }));
-                    }
-                }
-            }
-        }
-    }
-
-    return warnings;
-}
-
-
 /// Detect independent subgraphs (not connected to function inputs or outputs) and return a vector of bug reports if some are found
 fn check_for_underconstrained_values_within_function(
     function: &Function,
@@ -131,7 +75,6 @@ fn check_for_underconstrained_values_within_function(
 ) -> Vec<SsaReport> {
     let mut context = Context::default();
     let mut warnings: Vec<SsaReport> = Vec::new();
-
 
     context.compute_sets_of_connected_value_ids(function, all_functions);
 
@@ -703,7 +646,7 @@ impl DependencyContext {
 }
 
 #[derive(Default)]
-struct Context {
+pub(crate) struct Context {
     visited_blocks: HashSet<BasicBlockId>,
     block_queue: Vec<BasicBlockId>,
     value_sets: Vec<BTreeSet<ValueId>>,
@@ -792,113 +735,6 @@ impl Context {
             }
         }
         warnings
-    }
-
-    // analyse instruction and set a tag to result value, add tag in variable tags map
-    fn add_result_tag(
-        &mut self,
-        function: &Function,
-        instruction: &Instruction,
-        tags_map: &mut BTreeMap<ValueId,Visibility>,
-        ids_set: &mut BTreeSet<ValueId>,
-    ){
-        match *instruction{
-            Instruction::Binary(..) => {
-                //debug printers
-                println!("{:?}",*instruction);
-                println!("{:?}",ids_set);
-                let arg1 = ids_set.pop_first().unwrap();
-                let arg2 = ids_set.pop_first().unwrap();
-                let res = ids_set.pop_first().unwrap();
-                if !function.dfg.get_numeric_constant(arg1).is_none(){
-                    tags_map.insert(arg1, Visibility::Public);
-                }
-                if !function.dfg.get_numeric_constant(arg2).is_none(){
-                    tags_map.insert(arg2, Visibility::Public);
-                }
-                let tag1 = tags_map.get(&arg1).unwrap();
-                let tag2 = tags_map.get(&arg2).unwrap();
-                if *tag1 == Visibility::Private || *tag2 == Visibility::Private{
-                    tags_map.insert(res, Visibility::Private);
-                } else {
-                    tags_map.insert(res,Visibility::Public);
-                }
-            },
-            Instruction::Cast(..)
-            | Instruction::Not(..)
-            | Instruction::Truncate { .. } => {
-                println!("{:?}",*instruction);
-                println!("{:?}",ids_set);
-                let arg = ids_set.pop_first().unwrap();
-                if !function.dfg.get_numeric_constant(arg).is_none(){
-                    tags_map.insert(arg, Visibility::Public);
-                }
-                let res = ids_set.pop_first().unwrap();
-                let tag = tags_map.get(&arg).unwrap();
-                tags_map.insert(res, *tag);
-            },
-            Instruction::Constrain(..)
-            | Instruction::ConstrainNotEqual(..)
-            | Instruction::IfElse { .. }
-            | Instruction::Load { .. }
-            | Instruction::Store { .. }
-            | Instruction::MakeArray { .. }
-            | _ => {
-                println!("{:?}",*instruction);
-                println!("{:?}",ids_set);
-            }
-        }
-    }
-
-    ///add main function arguments in tags_map base on their visibility
-    fn add_main_args_in_tags_map(
-        &mut self,
-        tags_map: &mut BTreeMap<ValueId,Visibility>,
-        func_sig: &FunctionSignature,
-        function: &Function,
-    ){
-
-        // how to rename metadata
-        for (metadata,id) in (&func_sig.0).into_iter().zip(function.parameters()){
-            tags_map.insert(*id,metadata.2);
-        }
-    }
-    /// Go through each instruction in the block and marking all variables
-    fn make_tags_map(
-        &mut self,
-        function: &Function,
-        block: BasicBlockId,
-        func_sig: &FunctionSignature,
-    ) -> BTreeMap<ValueId, Visibility>{
-        let instructions = function.dfg[block].instructions();
-
-        let mut tags:BTreeMap<ValueId, Visibility> = BTreeMap::new();
-
-        self.add_main_args_in_tags_map(&mut tags, func_sig,function);
-
-        println!("dbg print block\n {:?}\n",block);
-        println!("dbg print instructions\n {:?}\n",instructions);
-
-        for instruction in instructions.iter() {
-            let mut instruction_arguments_and_results = BTreeSet::new();
-
-            // Insert all instruction arguments
-            function.dfg[*instruction].for_each_value(|value_id| {
-                instruction_arguments_and_results.insert(function.dfg.resolve(value_id));
-            });
-            // And all results
-            for value_id in function.dfg.instruction_results(*instruction).iter() {
-                instruction_arguments_and_results.insert(function.dfg.resolve(*value_id));
-            }
-
-            let mut instruction_arguments_and_results_copy = instruction_arguments_and_results.clone();
-
-            self.add_result_tag(function,&function.dfg[*instruction],&mut tags, &mut instruction_arguments_and_results_copy);
-
-        }
-
-        tags
-
     }
 
     /// Go through each instruction in the block and add a set of ValueIds connected through that instruction

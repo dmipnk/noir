@@ -46,6 +46,8 @@ pub(crate) fn generate_ssa(program: Program) -> Result<Ssa, RuntimeError> {
     // see which parameter has call_data/return_data attribute
     let is_databus = DataBusBuilder::is_databus(&program.main_function_signature);
 
+    println!("function signature in generate ssa dbg print {:?}",program.function_signatures);
+
     let is_return_data = matches!(program.return_visibility, Visibility::ReturnData);
 
     let return_location = program.return_location;
@@ -64,6 +66,7 @@ pub(crate) fn generate_ssa(program: Program) -> Result<Ssa, RuntimeError> {
     } else {
         RuntimeType::Acir(main.inline_type)
     };
+    println!("dbg print in generate ssa main parametrs {:?}",main);
     let mut function_context =
         FunctionContext::new(main.name.clone(), &main.parameters, main_runtime, &context, globals);
 
@@ -127,6 +130,7 @@ pub(crate) fn generate_ssa(program: Program) -> Result<Ssa, RuntimeError> {
     }
 
     let ssa = function_context.builder.finish();
+    println!("dbp print in ssa generator {}",ssa);
     Ok(ssa)
 }
 

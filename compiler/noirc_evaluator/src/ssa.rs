@@ -7,7 +7,7 @@
 //! This module heavily borrows from Cranelift
 
 use std::{
-    collections::{BTreeMap, BTreeSet}, fs::File, future::poll_fn, io::Write, path::{Path, PathBuf}
+    collections::{BTreeMap, BTreeSet}, fs::File, io::Write, path::{Path, PathBuf}
 };
 
 use crate::{
