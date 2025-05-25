@@ -7,7 +7,7 @@ use crate::ssa::ssa_gen::Ssa;
 use noirc_frontend::ast::Visibility;
 use noirc_frontend::hir_def::types::Type;
 use noirc_frontend::hir_def::function::FunctionSignature;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use crate::ssa::checks::check_for_underconstrained_values::Context;
 
 impl Ssa{
@@ -46,7 +46,10 @@ fn check_for_data_leakage_within_function(
     let mut flag = false;
     //todo: fix multiple warnings without flag
     for ret_val in function.returns().iter(){
-        if *(tags_map.get(ret_val).expect("error occured, there is no value in tags map with such id")) == Visibility::Private{
+        if function.dfg.get_numeric_constant(*ret_val).is_some(){
+            continue;
+        }
+        else if *(tags_map.get(ret_val).expect("error occured, there is no value in tags map with such id")) == Visibility::Private{
             flag = true;
             for instruction in instructions.iter(){
                 for value_id in function.dfg.instruction_results(*instruction).iter() {
@@ -72,21 +75,22 @@ fn check_for_data_leakage_within_function(
 impl Context{
 
     // analyse instruction and set a tag to result value, add tag in variable tags map
+    //todo: think about efficiency and difference between vec and btreeset in this case
     fn add_result_tag(
         &mut self,
         function: &Function,
         instruction: &Instruction,
         tags_map: &mut BTreeMap<ValueId,Visibility>,
-        ids_set: &mut BTreeSet<ValueId>,
+        ids_vec: &mut Vec<ValueId>,
     ){
         match *instruction{
             Instruction::Binary(..) => {
                 //debug printers
                 println!("{:?}",*instruction);
-                println!("{:?}",ids_set);
-                let arg1 = ids_set.pop_first().unwrap();
-                let arg2 = ids_set.pop_first().unwrap();
-                let res = ids_set.pop_first().unwrap();
+                println!("{:?}",ids_vec);
+                let arg1 = ids_vec[0];
+                let arg2 = ids_vec[1];
+                let res = ids_vec[2];
                 if function.dfg.get_numeric_constant(arg1).is_some(){
                     tags_map.insert(arg1, Visibility::Public);
                 }
@@ -105,18 +109,27 @@ impl Context{
             | Instruction::Not(..)
             | Instruction::Truncate { .. } => {
                 println!("{:?}",*instruction);
-                println!("{:?}",ids_set);
-                let arg = ids_set.pop_first().unwrap();
+                println!("{:?}",ids_vec);
+                let arg = ids_vec[0];
                 if function.dfg.get_numeric_constant(arg).is_some(){
                     tags_map.insert(arg, Visibility::Public);
                 }
-                let res = ids_set.pop_first().unwrap();
+                let res = ids_vec[1];
                 let tag = tags_map.get(&arg).unwrap();
                 tags_map.insert(res, *tag);
             },
+            Instruction::ArrayGet { .. } => {
+                println!("{:?}",*instruction);
+                println!("{:?}",ids_vec);
+                let arr = ids_vec[0];
+                let _ind = ids_vec[1];
+                let res = ids_vec[2];
+                let tag = tags_map.get(&arr).unwrap();
+                tags_map.insert(res,*tag);
+            }
             _ => {
                 println!("{:?}",*instruction);
-                println!("{:?}",ids_set);
+                println!("{:?}",ids_vec);
             }
         }
     }
@@ -168,15 +181,15 @@ impl Context{
         println!("dbg print instructions\n {:?}\n",instructions);
 
         for instruction in instructions.iter() {
-            let mut instruction_arguments_and_results = BTreeSet::new();
+            let mut instruction_arguments_and_results = Vec::new();
 
             // Insert all instruction arguments
             function.dfg[*instruction].for_each_value(|value_id| {
-                instruction_arguments_and_results.insert(function.dfg.resolve(value_id));
+                instruction_arguments_and_results.push(function.dfg.resolve(value_id));
             });
             // And all results
             for value_id in function.dfg.instruction_results(*instruction).iter() {
-                instruction_arguments_and_results.insert(function.dfg.resolve(*value_id));
+                instruction_arguments_and_results.push(function.dfg.resolve(*value_id));
             }
 
             let mut instruction_arguments_and_results_copy = instruction_arguments_and_results.clone();

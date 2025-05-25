@@ -40,6 +40,8 @@ fn main() {
     generate_compile_success_no_bug_tests(&mut test_file, &test_dir);
     generate_compile_success_with_bug_tests(&mut test_file, &test_dir);
     generate_compile_failure_tests(&mut test_file, &test_dir);
+    generate_data_privacy_violation_tests(&mut test_file, &test_dir);
+    generate_data_privacy_compliance_tests(&mut test_file, &test_dir);
 }
 
 /// Some tests are explicitly ignored in brillig due to them failing.
@@ -498,6 +500,60 @@ fn generate_compile_failure_tests(test_file: &mut File, test_data_dir: &Path) {
             "compile",
             r#"
                 nargo.assert().failure().stderr(predicate::str::contains("The application panicked (crashed).").not());
+            "#,
+            &MatrixConfig::default(),
+        );
+    }
+    writeln!(test_file, "}}").unwrap();
+}
+
+fn generate_data_privacy_violation_tests(test_file: &mut File, test_data_dir: &Path){
+    let test_type = "data_privacy_violation";
+    let test_cases = read_test_cases(test_data_dir, test_type);
+
+    writeln!(
+        test_file,
+        "mod {test_type} {{
+        use super::*;
+    "
+    )
+    .unwrap();
+    for (test_name, test_dir) in test_cases {
+        let test_dir = test_dir.display();
+        generate_test_cases(
+            test_file,
+            &test_name,
+            &test_dir,
+            "compile",
+            r#"
+                nargo.assert().stderr(predicate::str::contains("There is a data leak"));
+            "#,
+            &MatrixConfig::default(),
+        );
+    }
+    writeln!(test_file, "}}").unwrap();
+}
+
+fn generate_data_privacy_compliance_tests(test_file: &mut File, test_data_dir: &Path){
+    let test_type = "data_privacy_compliance";
+    let test_cases = read_test_cases(test_data_dir, test_type);
+
+    writeln!(
+        test_file,
+        "mod {test_type} {{
+        use super::*;
+    "
+    )
+    .unwrap();
+    for (test_name, test_dir) in test_cases {
+        let test_dir = test_dir.display();
+        generate_test_cases(
+            test_file,
+            &test_name,
+            &test_dir,
+            "compile",
+            r#"
+                nargo.assert().stderr(predicate::str::contains("There is a data leak").not());
             "#,
             &MatrixConfig::default(),
         );

@@ -1,0 +1,6 @@
+[package]
+name = "sum_of_private_array"
+type = "bin"
+authors = [""]
+
+[dependencies]

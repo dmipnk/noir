@@ -1,0 +1,6 @@
+[package]
+name = "auxiliary_function"
+type = "bin"
+authors = [""]
+
+[dependencies]

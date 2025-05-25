@@ -1,0 +1,6 @@
+[package]
+name = "return_of_a_constant"
+type = "bin"
+authors = [""]
+
+[dependencies]
