@@ -526,6 +526,7 @@ fn generate_data_privacy_violation_tests(test_file: &mut File, test_data_dir: &P
             &test_dir,
             "compile",
             r#"
+                nargo.assert().success();
                 nargo.assert().stderr(predicate::str::contains("There is a data leak"));
             "#,
             &MatrixConfig::default(),
@@ -553,6 +554,7 @@ fn generate_data_privacy_compliance_tests(test_file: &mut File, test_data_dir: &
             &test_dir,
             "compile",
             r#"
+                nargo.assert().success();
                 nargo.assert().stderr(predicate::str::contains("There is a data leak").not());
             "#,
             &MatrixConfig::default(),
