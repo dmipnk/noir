@@ -1,0 +1,6 @@
+[package]
+name = "value_return"
+type = "bin"
+authors = [""]
+
+[dependencies]

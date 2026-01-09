@@ -44,6 +44,7 @@ fn arb_program_can_be_executed() {
             emit_ssa: None,
             skip_underconstrained_check: true,
             skip_brillig_constraints_check: true,
+            skip_data_leakage_check: true, // NOTE: well i dont know true or false
             enable_brillig_constraints_check_lookback: false,
             inliner_aggressiveness: 0,
             constant_folding_max_iter: CONSTANT_FOLDING_MAX_ITER,

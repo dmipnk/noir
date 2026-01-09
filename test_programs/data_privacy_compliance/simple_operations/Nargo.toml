@@ -1,0 +1,6 @@
+[package]
+name = "simple_opreations"
+type = "bin"
+authors = [""]
+
+[dependencies]

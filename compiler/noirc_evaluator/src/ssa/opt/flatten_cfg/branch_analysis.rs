@@ -644,6 +644,7 @@ mod test {
             emit_ssa: None,
             skip_underconstrained_check: true,
             skip_brillig_constraints_check: true,
+            skip_data_leakage_check: true,
             enable_brillig_constraints_check_lookback: false,
             inliner_aggressiveness: 0,
             constant_folding_max_iter: constant_folding::DEFAULT_MAX_ITER,

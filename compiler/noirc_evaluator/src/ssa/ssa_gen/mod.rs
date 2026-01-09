@@ -50,6 +50,9 @@ pub(crate) const SSA_WORD_SIZE: u32 = 32;
 ///
 /// This function will generate the SSA but does not perform any optimizations on it.
 pub fn generate_ssa(program: Program) -> Result<Ssa, RuntimeError> {
+
+
+    let func_sigs = program.function_signatures.clone();
     // see which parameter has call_data/return_data attribute
     let is_databus = DataBusBuilder::is_databus(&program.main_function_signature);
 
@@ -133,7 +136,8 @@ pub fn generate_ssa(program: Program) -> Result<Ssa, RuntimeError> {
         function_context.codegen_function_body(&function.body)?;
     }
 
-    let ssa = function_context.builder.finish();
+    let mut ssa = function_context.builder.finish();
+    ssa.set_funcsig(func_sigs);
 
     validate_ssa_or_err(ssa)
 }

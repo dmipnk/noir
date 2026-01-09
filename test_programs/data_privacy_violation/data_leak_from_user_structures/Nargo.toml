@@ -1,0 +1,6 @@
+[package]
+name = "data_leak_from_user_structures"
+type = "bin"
+authors = [""]
+
+[dependencies]

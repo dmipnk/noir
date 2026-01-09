@@ -94,6 +94,9 @@ pub struct SsaEvaluatorOptions {
     /// Skip the check for under constrained values
     pub skip_underconstrained_check: bool,
 
+    /// Skip the check for data leakage
+    pub skip_data_leakage_check: bool,
+
     /// Skip the missing Brillig call constraints check
     pub skip_brillig_constraints_check: bool,
 
@@ -337,6 +340,14 @@ pub fn optimize_ssa_builder_into_acir(
         ));
     };
 
+    if !options.skip_data_leakage_check {
+        ssa_level_warnings.extend(time(
+            "After Check for Data Leakage",
+            options.print_codegen_timings,
+            || ssa.check_for_data_leakage(),
+        ));
+    }
+
     drop(ssa_gen_span_guard);
     let artifacts = time("SSA to ACIR", options.print_codegen_timings, || {
         ssa.into_acir(&brillig, &options.brillig_options)
@@ -363,7 +374,7 @@ pub fn optimize_into_acir(
         &options.emit_ssa,
         files,
     )?;
-
+    
     optimize_ssa_builder_into_acir(builder, options, passes)
 }
 

@@ -134,6 +134,7 @@ impl From<SsaReport> for CustomDiagnostic {
                         }
                         ("As a result, the compiled circuit is ensured to fail. Other assertions may also fail during execution".to_string(), call_stack)
                     }
+                    InternalBug::DataLeak { call_stack } => ("Data leakage occurs as a result of incorrect program design".to_string(), call_stack)
                 };
                 let call_stack = vecmap(call_stack, |location| location);
                 let location = call_stack.last().expect("Expected RuntimeError to have a location");
@@ -159,6 +160,8 @@ pub enum InternalBug {
     UncheckedBrilligCall { call_stack: CallStack },
     #[error("Assertion is always false")]
     AssertFailed { call_stack: CallStack, message: Option<String> },
+    #[error("There is a data leak")]
+    DataLeak {call_stack: CallStack},
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Error)]

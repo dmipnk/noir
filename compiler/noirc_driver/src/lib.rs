@@ -149,6 +149,12 @@ pub struct CompileOptions {
     #[arg(long)]
     pub skip_underconstrained_check: bool,
 
+    /// Flag to turn off the compiler check for under constrained values.
+    /// Warning: This can improve compilation speed but can also lead to correctness errors.
+    /// This check should always be run on production code. (not sure about that))
+    #[arg(long)]
+    pub skip_data_leakage_check: bool,
+
     /// Flag to turn off the compiler check for missing Brillig call constraints.
     /// Warning: This can improve compilation speed but can also lead to correctness errors.
     /// This check should always be run on production code.
@@ -249,6 +255,7 @@ impl Default for CompileOptions {
             debug_comptime_in_file: None,
             show_artifact_paths: false,
             skip_underconstrained_check: false,
+            skip_data_leakage_check: false,
             skip_brillig_constraints_check: false,
             enable_brillig_debug_assertions: false,
             count_array_copies: false,
@@ -286,6 +293,7 @@ impl CompileOptions {
             print_codegen_timings: self.benchmark_codegen,
             emit_ssa: if self.emit_ssa { Some(package_build_path) } else { None },
             skip_underconstrained_check: !self.silence_warnings && self.skip_underconstrained_check,
+            skip_data_leakage_check: self.skip_data_leakage_check,
             enable_brillig_constraints_check_lookback: self
                 .enable_brillig_constraints_check_lookback,
             skip_brillig_constraints_check: !self.silence_warnings

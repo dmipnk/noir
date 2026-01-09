@@ -11,7 +11,7 @@ use crate::ssa::ir::{
     map::AtomicCounter,
     value::Value,
 };
-use noirc_frontend::hir_def::types::Type as HirType;
+use noirc_frontend::hir_def::{function::FunctionSignature, types::Type as HirType};
 
 use super::ValueId;
 
@@ -21,6 +21,9 @@ use super::ValueId;
 pub struct Ssa {
     #[serde_as(as = "Vec<(_, _)>")]
     pub functions: BTreeMap<FunctionId, Function>,
+    // NOTE: add function signatures for check for data leakege
+    #[serde(skip)]
+    pub function_signatures: Option<Vec<FunctionSignature>>, 
     pub main_id: FunctionId,
     #[serde(skip)]
     pub next_id: AtomicCounter<Function>,
@@ -50,11 +53,17 @@ impl Ssa {
 
         Self {
             functions,
+            function_signatures: None,
             main_id,
             next_id: AtomicCounter::starting_after(max_id),
             entry_point_to_generated_index: BTreeMap::new(),
             error_selector_to_type: error_types,
         }
+    }
+
+
+    pub fn set_funcsig(&mut self, function_signatures: Vec<FunctionSignature>) {
+        self.function_signatures = Some(function_signatures);
     }
 
     /// Returns the entry-point function of the program

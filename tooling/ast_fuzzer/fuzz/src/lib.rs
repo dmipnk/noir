@@ -31,6 +31,7 @@ pub fn default_ssa_options() -> SsaEvaluatorOptions {
         print_codegen_timings: false,
         emit_ssa: None,
         skip_underconstrained_check: true,
+        skip_data_leakage_check: true, // NOTE: well i dont know true or false
         skip_brillig_constraints_check: true,
         enable_brillig_constraints_check_lookback: false,
         inliner_aggressiveness: 0,

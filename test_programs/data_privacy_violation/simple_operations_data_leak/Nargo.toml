@@ -1,0 +1,6 @@
+[package]
+name = "simple_opreations_data_leak"
+type = "bin"
+authors = [""]
+
+[dependencies]
