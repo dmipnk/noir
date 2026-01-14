@@ -1,0 +1,6 @@
+[package]
+name = "keccakf1600"
+type = "bin"
+authors = [""]
+
+[dependencies]

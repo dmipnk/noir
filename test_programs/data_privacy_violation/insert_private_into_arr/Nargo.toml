@@ -1,0 +1,6 @@
+[package]
+name = "insert_private_into_arr"
+type = "bin"
+authors = [""]
+
+[dependencies]

@@ -1,0 +1,6 @@
+[package]
+name = "multiscalar_mul_priv_points"
+type = "bin"
+authors = [""]
+
+[dependencies]

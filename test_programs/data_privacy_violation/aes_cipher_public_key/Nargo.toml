@@ -1,0 +1,6 @@
+[package]
+name = "aes_cipher_public_key"
+type = "bin"
+authors = [""]
+
+[dependencies]

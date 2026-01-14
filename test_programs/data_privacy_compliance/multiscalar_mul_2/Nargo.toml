@@ -1,0 +1,6 @@
+[package]
+name = "multiscalar_mul_2"
+type = "bin"
+authors = [""]
+
+[dependencies]

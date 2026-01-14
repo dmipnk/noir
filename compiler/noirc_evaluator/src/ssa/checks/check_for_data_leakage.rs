@@ -1,8 +1,10 @@
+use acvm::acir::circuit::black_box_functions::BlackBoxFunc;
 use crate::errors::{InternalBug, SsaReport};
 use crate::ssa::ir::basic_block::BasicBlockId;
 use crate::ssa::ir::function::Function;
-use crate::ssa::ir::instruction::Instruction;
+use crate::ssa::ir::instruction::{Instruction, Intrinsic};
 use crate::ssa::ir::value::ValueId;
+use crate::ssa::ir::value::Value;
 use crate::ssa::ssa_gen::Ssa;
 use crate::ssa::Visibility; //NOTE: mb shoul use frontend::shared:visibility
 use noirc_frontend::hir_def::types::Type;
@@ -19,7 +21,8 @@ impl Ssa{
         //     std::process::exit(1);
         // }
         let func_sigs = &self.function_signatures.clone().unwrap();
-        // println!("signatures in check_for_data_leakage dbg print {:?}\n",func_sigs);
+        println!("dbg print: ssa in cfdl {}\n", self);
+        println!("signatures in check_for_data_leakage dbg print {:?}\n",func_sigs);
         self.normalize_ids();
         self.functions
             .values()
@@ -41,14 +44,19 @@ fn check_for_data_leakage_within_function(
     let mut warnings: Vec<SsaReport> = Vec::new();
 
     let tags_map = make_tags_map(function, function.entry_block(), func_sig);
-    println!("\ndbg print tags map in function {:?}", tags_map);
+    tags_map_pretty_printer(&tags_map, function);
     println!("function returns {:?}\n",function.returns());
 
     let instructions = function.dfg[function.entry_block()].instructions();
+    println!("dbg print: instructions {:?}",instructions);
     let mut flag = false;
-    // TODO: fix multiple warnings without flag
+    // TODO: 1) fix multiple warnings without flag
+    // 2) add assert instruction analysis 
+    // 3) handle case when return value is none 
     // WARN: something may go wrong because of the unwrap (if function returns nothing, should test)
-    // WARN: removed function.dfg.resolve and made it boldly
+    //  removed function.dfg.resolve and made it straightforward
+    //  when i incorrectly use poseidon permutations function return of main is none
+    //  and i get panic 
     for ret_val in function.returns().unwrap().iter(){
         if function.dfg.get_numeric_constant(*ret_val).is_some(){
             continue;
@@ -59,16 +67,25 @@ fn check_for_data_leakage_within_function(
                 for value_id in function.dfg.instruction_results(*instruction).iter() {
                     // NOTE: there was function.dfg.resolve
                     if *ret_val == *value_id{
+                        // println!("dbg print: instruntion: {:?} and call stack {:?} \n", instruction, function.dfg.get_instruction_call_stack(*instruction));
+                        // println!("dbg print: value: {:?} and value call stack {:?} \n", ret_val, function.dfg.get_value_call_stack(*ret_val));
+                        let call_stack = function.dfg.get_instruction_call_stack(*instruction);
+                        // BUG: makearray instruction hasn't call stack 
+                        // fn main(x: u16) -> pub [u16; 5] {
+                        //     let arr = [x;5];
+                        //     arr
+                        // }
+                        // so i added is_empty
+                        if call_stack.is_empty() {continue;}
                         warnings.push(SsaReport::Bug(InternalBug::DataLeak {
-                            call_stack: function.dfg.get_instruction_call_stack(
-                                *instruction
-                            ),
+                            call_stack: call_stack,
                         }));
                     }
                 }
             }
         }
     }
+    // NOTE: this is for adding call stack of terminator instruction
     if flag{
         warnings.push(SsaReport::Bug(InternalBug::DataLeak {
             call_stack: function.dfg.get_call_stack(function.dfg[function.entry_block()].terminator().unwrap().call_stack())
@@ -127,13 +144,62 @@ fn add_result_tag(
             println!("{:?}",ids_vec);
             let arr = ids_vec[0];
             let _ind = ids_vec[1];
+            if function.dfg.get_numeric_constant(_ind).is_some() {
+                tags_map.insert(_ind, Visibility::Public);
+            }
             let res = ids_vec[2];
             let tag = tags_map.get(&arr).unwrap();
             tags_map.insert(res,*tag);
-        }
-        _ => {
+        },
+        Instruction::MakeArray { .. } => {
             println!("{:?}",*instruction);
             println!("{:?}",ids_vec);
+            let mut vis = Visibility::Public;
+            for element in &ids_vec[0..ids_vec.len()-1] {
+                println!("dbg print in makearray element: {} - {:?}",element,function.dfg.type_of_value(*element));
+                if tags_map.get(element).is_none() {
+                   if function.dfg.get_numeric_constant(*element).is_some() {
+                        tags_map.insert(*element,Visibility::Public);
+                    } 
+                } else {
+                    if *tags_map.get(element).unwrap() == Visibility::Private {
+                        vis = Visibility::Private;
+                    }
+                }
+            }
+            tags_map.insert(ids_vec[ids_vec.len()-1], vis);
+        }
+        Instruction::Call { .. } => {
+            println!("{:?}",*instruction);
+            println!("{:?}",ids_vec);
+            let function_value = &function.dfg[ids_vec[0]];
+            println!("dbg print function value: {:?}\n", function_value);
+            match function_value {
+                Value::Intrinsic (intrinsic) => {
+                    println!("dbg print intrinsic {:?}\n", intrinsic);
+                    match intrinsic {
+                        Intrinsic::BlackBox( blackbox_func ) => {
+                            println!("dbg print: ids vec in call instruction {:?} \n", ids_vec);     
+                            let ids_vec_len = ids_vec.len();
+                            let tag = blackbox_function_analysis(function,blackbox_func, &ids_vec[1..ids_vec_len-1], tags_map);
+                            tags_map.insert(ids_vec[ids_vec.len()-1],tag);
+                        },
+                       _ => {
+                            println!("there is not bbox intrinsic function ")
+
+                       }
+                    }
+                },
+                _ => {
+                    println!("value of function nor intrinsic \n");
+                }
+                
+            }
+            
+        }
+        _ => {
+            println!("{:?} \n",*instruction);
+            println!("{:?} \n",ids_vec);
         }
     }
 }
@@ -150,6 +216,7 @@ fn add_main_args_in_tags_map(
     // TODO: cover all cases
     for param in &func_sig.0{
         match &param.1 {
+            // user structure parsing
             Type::DataType(definition, generics) => {
                 let fields = definition.borrow().get_fields(generics).unwrap();
                 for field in fields{
@@ -160,7 +227,7 @@ fn add_main_args_in_tags_map(
         }
     }
 
-    println!("dbg print args vector {:?}",args);
+    println!("dbg print args vector {:?}\n",args);
 
     for (metadata,id) in (args).iter().zip(function.parameters()){
         tags_map.insert(*id,metadata.0);
@@ -184,15 +251,19 @@ fn make_tags_map(
 
     for instruction in instructions.iter() {
         let mut instruction_arguments_and_results = Vec::new();
-
+        println!("instruction: {:?}", instruction);
         // Insert all instruction arguments
+        println!("========instruction arguments=======");
         function.dfg[*instruction].for_each_value(|value_id| {
         // NOTE: there was function.dfg.resolve
+            println!("{} - {:?}", value_id, function.dfg.type_of_value(value_id));
             instruction_arguments_and_results.push(value_id); 
         });
         // And all results
+        // println!("instruction results ");
         for value_id in function.dfg.instruction_results(*instruction).iter() {
         // NOTE: there was function.dfg.resolve
+            println!("instruction result {} - {:?}", *value_id, function.dfg.type_of_value(*value_id));
             instruction_arguments_and_results.push(*value_id);
         }
 
@@ -206,4 +277,93 @@ fn make_tags_map(
 
 }
 
+fn blackbox_function_analysis(
+    function: &Function,
+    blackbox_function: &BlackBoxFunc,
+    arguments: &[ValueId],
+    tags_map: &mut BTreeMap<ValueId, Visibility>,
+) -> Visibility{
+   match blackbox_function {
+        // TODO: external safety check for non valid prog design
+        // for example iv private, key is public 
+        BlackBoxFunc::AES128Encrypt => {
+            println!("dbg print: arguments of blackbox function\n {:?}", arguments);
+            let _input = arguments[0];
+            let _iv = arguments[1];
+            let key = arguments[2];
+            if function.dfg.get_numeric_constant(key).is_some(){
+                tags_map.insert(key, Visibility::Public);
+            }
+            if *tags_map.get(&key).unwrap() == Visibility::Public {
+                return Visibility::Private
+            } else {
+                return Visibility::Public
+            } 
+        },
+        BlackBoxFunc::Blake3 |
+        BlackBoxFunc::Blake2s |
+        BlackBoxFunc::Sha256Compression => {
+            // TODO: use entropy analyzer in far future
+            return Visibility::Public
+        }
+        // NOTE: not very sure about permutations, the logic is 
+        // if keccak is reversible then we should save  visibility of input
+        BlackBoxFunc::Keccakf1600 |
+        BlackBoxFunc::Poseidon2Permutation => {
+            return *tags_map.get(&arguments[0]).unwrap();
+        },
+        // NOTE: very primitive logic (if smth is private then result is private)
+        // TODO: handle all cases when implement a more detailed version
+        BlackBoxFunc::EmbeddedCurveAdd => {
+            // NOTE: dont know anything about pedantic solving flag
+            // but since it is numeric constant then it does not affect on result visibility
+            for arg in arguments.iter() {
+                if function.dfg.get_numeric_constant(*arg).is_some() {
+                    tags_map.insert(*arg, Visibility::Public);
+                } else {
+                    if *tags_map.get(arg).unwrap() == Visibility::Private {return Visibility::Private;}
+                }
+            }
+            return Visibility::Public;
+        },
+        // NOTE: same code as EmbeddedCurveAdd now, but they will be different in future
+        BlackBoxFunc::MultiScalarMul => {
+            for arg in arguments.iter() {
+                if function.dfg.get_numeric_constant(*arg).is_some() {
+                    tags_map.insert(*arg, Visibility::Public);
+                } else {
+                    if *tags_map.get(arg).unwrap() == Visibility::Private {return Visibility::Private;}
+                }
+            }
+            return Visibility::Public;
+        },
+        // NOTE: logic is that parametrs of function 
+        // dont compromise anything (since key is public, hash is hash
+        // and signature is signature)
+        BlackBoxFunc::EcdsaSecp256k1 |
+        BlackBoxFunc::EcdsaSecp256r1 => {
+            return Visibility::Public;
+        }
 
+        _ => {
+            println!("other bbox functions");
+            return Visibility::Private
+        }
+    }
+}
+
+
+// only for debug purposes
+fn tags_map_pretty_printer(
+    tags_map: &BTreeMap<ValueId,Visibility>,
+    function: &Function,
+){
+    println!("============TAGS MAP==============");
+    for tag in tags_map{
+        if *tag.1 != Visibility::Private {
+            println!("{} - {:?} - {}", tag.0, function.dfg.type_of_value((*tag.0).clone()),tag.1);
+        } else {
+            println!("{} - {:?} - priv", tag.0, function.dfg.type_of_value((*tag.0).clone()));
+        }
+    }
+}

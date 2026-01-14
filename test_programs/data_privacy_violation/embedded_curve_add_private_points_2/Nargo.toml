@@ -1,0 +1,6 @@
+[package]
+name = "embedded_curve_add_private_points_2"
+type = "bin"
+authors = [""]
+
+[dependencies]

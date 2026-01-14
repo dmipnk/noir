@@ -1,0 +1,6 @@
+[package]
+name = "keccakf1600_private_inputs"
+type = "bin"
+authors = [""]
+
+[dependencies]
