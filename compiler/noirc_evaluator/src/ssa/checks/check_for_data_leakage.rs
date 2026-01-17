@@ -300,17 +300,15 @@ fn blackbox_function_analysis(
                 return Visibility::Public
             } 
         },
+        // TODO: keccak poseidon
         BlackBoxFunc::Blake3 |
         BlackBoxFunc::Blake2s |
-        BlackBoxFunc::Sha256Compression => {
-            // TODO: use entropy analyzer in far future
-            return Visibility::Public
-        }
-        // NOTE: not very sure about permutations, the logic is 
-        // if keccak is reversible then we should save  visibility of input
+        BlackBoxFunc::Sha256Compression |
+        // NOTE: keccak and poseidon are inreversible 
         BlackBoxFunc::Keccakf1600 |
         BlackBoxFunc::Poseidon2Permutation => {
-            return *tags_map.get(&arguments[0]).unwrap();
+            // TODO: use entropy analyzer in far future
+            return Visibility::Public
         },
         // NOTE: very primitive logic (if smth is private then result is private)
         // TODO: handle all cases when implement a more detailed version
@@ -326,16 +324,13 @@ fn blackbox_function_analysis(
             }
             return Visibility::Public;
         },
-        // NOTE: same code as EmbeddedCurveAdd now, but they will be different in future
+        // NOTE: scalar is public -> depends on points visibility
+        // scalar is private -> public (discrete logarithm problem)
         BlackBoxFunc::MultiScalarMul => {
-            for arg in arguments.iter() {
-                if function.dfg.get_numeric_constant(*arg).is_some() {
-                    tags_map.insert(*arg, Visibility::Public);
-                } else {
-                    if *tags_map.get(arg).unwrap() == Visibility::Private {return Visibility::Private;}
-                }
-            }
-            return Visibility::Public;
+            let points = arguments[0];
+            let scalars = arguments[1];
+            if *tags_map.get(&scalars).unwrap() == Visibility::Private { return Visibility::Public }
+            return *tags_map.get(&points).unwrap()
         },
         // NOTE: logic is that parametrs of function 
         // dont compromise anything (since key is public, hash is hash
@@ -347,7 +342,7 @@ fn blackbox_function_analysis(
 
         _ => {
             println!("other bbox functions");
-            return Visibility::Private
+            return Visibility::Public
         }
     }
 }
