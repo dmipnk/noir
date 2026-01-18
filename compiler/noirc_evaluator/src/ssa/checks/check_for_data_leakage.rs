@@ -2,7 +2,7 @@ use acvm::acir::circuit::black_box_functions::BlackBoxFunc;
 use crate::errors::{InternalBug, SsaReport};
 use crate::ssa::ir::basic_block::BasicBlockId;
 use crate::ssa::ir::function::Function;
-use crate::ssa::ir::instruction::{Instruction, Intrinsic};
+use crate::ssa::ir::instruction::{Instruction, InstructionId, Intrinsic};
 use crate::ssa::ir::value::ValueId;
 use crate::ssa::ir::value::Value;
 use crate::ssa::ssa_gen::Ssa;
@@ -45,11 +45,11 @@ fn check_for_data_leakage_within_function(
 
     let tags_map = make_tags_map(function, function.entry_block(), func_sig);
     tags_map_pretty_printer(&tags_map, function);
+    let mut bad_instr: Vec<InstructionId> = Vec::new();
     println!("function returns {:?}\n",function.returns());
 
     let instructions = function.dfg[function.entry_block()].instructions();
     println!("dbg print: instructions {:?}",instructions);
-    let mut flag = false;
     // TODO: 1) fix multiple warnings without flag
     // 2) add assert instruction analysis 
     // 3) handle case when return value is none 
@@ -57,36 +57,41 @@ fn check_for_data_leakage_within_function(
     //  removed function.dfg.resolve and made it straightforward
     //  when i incorrectly use poseidon permutations function return of main is none
     //  and i get panic 
+    // BUG: makearray instruction hasn't call stack 
+    // fn main(x: u16) -> pub [u16; 5] {
+    //     let arr = [x;5];
+    //     arr
+    // }
+    // when we have simple return tags_map_analysis don't insert terminator instruction
+    // so we need helper flag
+    let mut terminator_flag = false;
     for ret_val in function.returns().unwrap().iter(){
         if function.dfg.get_numeric_constant(*ret_val).is_some(){
             continue;
         }
-        else if *(tags_map.get(ret_val).expect("error occured, there is no value in tags map with such id")) == Visibility::Private{
-            flag = true;
-            for instruction in instructions.iter(){
-                for value_id in function.dfg.instruction_results(*instruction).iter() {
-                    // NOTE: there was function.dfg.resolve
-                    if *ret_val == *value_id{
-                        // println!("dbg print: instruntion: {:?} and call stack {:?} \n", instruction, function.dfg.get_instruction_call_stack(*instruction));
-                        // println!("dbg print: value: {:?} and value call stack {:?} \n", ret_val, function.dfg.get_value_call_stack(*ret_val));
-                        let call_stack = function.dfg.get_instruction_call_stack(*instruction);
-                        // BUG: makearray instruction hasn't call stack 
-                        // fn main(x: u16) -> pub [u16; 5] {
-                        //     let arr = [x;5];
-                        //     arr
-                        // }
-                        // so i added is_empty
-                        if call_stack.is_empty() {continue;}
-                        warnings.push(SsaReport::Bug(InternalBug::DataLeak {
-                            call_stack: call_stack,
-                        }));
-                    }
-                }
-            }
+        else if (tags_map.get(ret_val).expect("error occured, there is no value in tags map with such id")).0 == Visibility::Private{
+            tags_map_analysis(&tags_map, ret_val.clone(),&mut bad_instr, function);
+            terminator_flag = true;        
+                
         }
     }
+    if !bad_instr.is_empty(){
+        bad_instr.sort();
+        let mut prev_instr: InstructionId = bad_instr[0];
+        let mut flag = false;
+        for instruction in bad_instr.iter(){
+            println!("dbg print bad_instr {:?}",instruction);
+            if *instruction == prev_instr && flag==true {continue;}
+            let call_stack = function.dfg.get_instruction_call_stack(*instruction);
+            if call_stack.is_empty() {continue;}
+            warnings.push(SsaReport::Bug(InternalBug::DataLeak { call_stack: call_stack }));
+            prev_instr = *instruction;
+            flag = true;
+        }
+        terminator_flag = true;
+    }
     // NOTE: this is for adding call stack of terminator instruction
-    if flag{
+    if terminator_flag {
         warnings.push(SsaReport::Bug(InternalBug::DataLeak {
             call_stack: function.dfg.get_call_stack(function.dfg[function.entry_block()].terminator().unwrap().call_stack())
         }));
@@ -101,7 +106,8 @@ fn check_for_data_leakage_within_function(
 fn add_result_tag(
     function: &Function,
     instruction: &Instruction,
-    tags_map: &mut BTreeMap<ValueId,Visibility>,
+    instruction_id: InstructionId,
+    tags_map: &mut BTreeMap<ValueId,(Visibility,Option<InstructionId>)>,
     ids_vec: &mut Vec<ValueId>,
 ){
     match *instruction{
@@ -113,17 +119,17 @@ fn add_result_tag(
             let arg2 = ids_vec[1];
             let res = ids_vec[2];
             if function.dfg.get_numeric_constant(arg1).is_some(){
-                tags_map.insert(arg1, Visibility::Public);
+                tags_map.insert(arg1, (Visibility::Public,None));
             }
             if function.dfg.get_numeric_constant(arg2).is_some(){
-                tags_map.insert(arg2, Visibility::Public);
+                tags_map.insert(arg2, (Visibility::Public,None));
             }
             let tag1 = tags_map.get(&arg1).unwrap();
             let tag2 = tags_map.get(&arg2).unwrap();
-            if *tag1 == Visibility::Private || *tag2 == Visibility::Private{
-                tags_map.insert(res, Visibility::Private);
+            if tag1.0 == Visibility::Private || tag2.0 == Visibility::Private{
+                tags_map.insert(res, (Visibility::Private,Some(instruction_id)));
             } else {
-                tags_map.insert(res,Visibility::Public);
+                tags_map.insert(res,(Visibility::Public,Some(instruction_id)));
             }
         },
         Instruction::Cast(..)
@@ -133,11 +139,11 @@ fn add_result_tag(
             println!("{:?}",ids_vec);
             let arg = ids_vec[0];
             if function.dfg.get_numeric_constant(arg).is_some(){
-                tags_map.insert(arg, Visibility::Public);
+                tags_map.insert(arg, (Visibility::Public,None));
             }
             let res = ids_vec[1];
-            let tag = tags_map.get(&arg).unwrap();
-            tags_map.insert(res, *tag);
+            let tag = tags_map.get(&arg).unwrap().0;
+            tags_map.insert(res, (tag,Some(instruction_id)));
         },
         Instruction::ArrayGet { .. } => {
             println!("{:?}",*instruction);
@@ -145,11 +151,11 @@ fn add_result_tag(
             let arr = ids_vec[0];
             let _ind = ids_vec[1];
             if function.dfg.get_numeric_constant(_ind).is_some() {
-                tags_map.insert(_ind, Visibility::Public);
+                tags_map.insert(_ind, (Visibility::Public,None));
             }
             let res = ids_vec[2];
-            let tag = tags_map.get(&arr).unwrap();
-            tags_map.insert(res,*tag);
+            let tag = tags_map.get(&arr).unwrap().0;
+            tags_map.insert(res,(tag,Some(instruction_id)));
         },
         Instruction::MakeArray { .. } => {
             println!("{:?}",*instruction);
@@ -159,15 +165,15 @@ fn add_result_tag(
                 println!("dbg print in makearray element: {} - {:?}",element,function.dfg.type_of_value(*element));
                 if tags_map.get(element).is_none() {
                    if function.dfg.get_numeric_constant(*element).is_some() {
-                        tags_map.insert(*element,Visibility::Public);
+                        tags_map.insert(*element,(Visibility::Public,None));
                     } 
                 } else {
-                    if *tags_map.get(element).unwrap() == Visibility::Private {
+                    if tags_map.get(element).unwrap().0 == Visibility::Private {
                         vis = Visibility::Private;
                     }
                 }
             }
-            tags_map.insert(ids_vec[ids_vec.len()-1], vis);
+            tags_map.insert(ids_vec[ids_vec.len()-1], (vis,Some(instruction_id)));
         }
         Instruction::Call { .. } => {
             println!("{:?}",*instruction);
@@ -182,7 +188,7 @@ fn add_result_tag(
                             println!("dbg print: ids vec in call instruction {:?} \n", ids_vec);     
                             let ids_vec_len = ids_vec.len();
                             let tag = blackbox_function_analysis(function,blackbox_func, &ids_vec[1..ids_vec_len-1], tags_map);
-                            tags_map.insert(ids_vec[ids_vec.len()-1],tag);
+                            tags_map.insert(ids_vec[ids_vec.len()-1],(tag,Some(instruction_id)));
                         },
                        _ => {
                             println!("there is not bbox intrinsic function ")
@@ -206,7 +212,7 @@ fn add_result_tag(
 
 ///add main function arguments in tags_map base on their visibility
 fn add_main_args_in_tags_map(
-    tags_map: &mut BTreeMap<ValueId,Visibility>,
+    tags_map: &mut BTreeMap<ValueId,(Visibility,Option<InstructionId>)>,
     func_sig: &FunctionSignature,
     function: &Function,
 ){
@@ -230,7 +236,7 @@ fn add_main_args_in_tags_map(
     println!("dbg print args vector {:?}\n",args);
 
     for (metadata,id) in (args).iter().zip(function.parameters()){
-        tags_map.insert(*id,metadata.0);
+        tags_map.insert(*id,(metadata.0,None));
     }
 }
 
@@ -239,10 +245,10 @@ fn make_tags_map(
     function: &Function,
     block: BasicBlockId,
     func_sig: &FunctionSignature,
-) -> BTreeMap<ValueId, Visibility>{
+) -> BTreeMap<ValueId, (Visibility,Option<InstructionId>)>{
     let instructions = function.dfg[block].instructions();
 
-    let mut tags:BTreeMap<ValueId, Visibility> = BTreeMap::new();
+    let mut tags:BTreeMap<ValueId, (Visibility,Option<InstructionId>)> = BTreeMap::new();
 
     add_main_args_in_tags_map(&mut tags, func_sig,function);
 
@@ -269,7 +275,7 @@ fn make_tags_map(
 
         let mut instruction_arguments_and_results_copy = instruction_arguments_and_results.clone();
 
-        add_result_tag(function,&function.dfg[*instruction],&mut tags, &mut instruction_arguments_and_results_copy);
+        add_result_tag(function,&function.dfg[*instruction],*instruction,&mut tags, &mut instruction_arguments_and_results_copy);
 
     }
 
@@ -281,7 +287,7 @@ fn blackbox_function_analysis(
     function: &Function,
     blackbox_function: &BlackBoxFunc,
     arguments: &[ValueId],
-    tags_map: &mut BTreeMap<ValueId, Visibility>,
+    tags_map: &mut BTreeMap<ValueId, (Visibility, Option<InstructionId>)>,
 ) -> Visibility{
    match blackbox_function {
         // TODO: external safety check for non valid prog design
@@ -292,9 +298,9 @@ fn blackbox_function_analysis(
             let _iv = arguments[1];
             let key = arguments[2];
             if function.dfg.get_numeric_constant(key).is_some(){
-                tags_map.insert(key, Visibility::Public);
+                tags_map.insert(key, (Visibility::Public,None));
             }
-            if *tags_map.get(&key).unwrap() == Visibility::Public {
+            if tags_map.get(&key).unwrap().0 == Visibility::Public {
                 return Visibility::Private
             } else {
                 return Visibility::Public
@@ -315,11 +321,12 @@ fn blackbox_function_analysis(
         BlackBoxFunc::EmbeddedCurveAdd => {
             // NOTE: dont know anything about pedantic solving flag
             // but since it is numeric constant then it does not affect on result visibility
+
             for arg in arguments.iter() {
                 if function.dfg.get_numeric_constant(*arg).is_some() {
-                    tags_map.insert(*arg, Visibility::Public);
+                    tags_map.insert(*arg, (Visibility::Public,None));
                 } else {
-                    if *tags_map.get(arg).unwrap() == Visibility::Private {return Visibility::Private;}
+                    if tags_map.get(arg).unwrap().0 == Visibility::Private {return Visibility::Private;}
                 }
             }
             return Visibility::Public;
@@ -329,8 +336,8 @@ fn blackbox_function_analysis(
         BlackBoxFunc::MultiScalarMul => {
             let points = arguments[0];
             let scalars = arguments[1];
-            if *tags_map.get(&scalars).unwrap() == Visibility::Private { return Visibility::Public }
-            return *tags_map.get(&points).unwrap()
+            if tags_map.get(&scalars).unwrap().0 == Visibility::Private { return Visibility::Public }
+            return tags_map.get(&points).unwrap().0
         },
         // NOTE: logic is that parametrs of function 
         // dont compromise anything (since key is public, hash is hash
@@ -347,16 +354,43 @@ fn blackbox_function_analysis(
     }
 }
 
+// go through tags_map and search instructions that cause
+// data leak through public return value
+// bool return is representing deadend
+fn tags_map_analysis (
+    tags_map: &BTreeMap<ValueId,(Visibility, Option<InstructionId>)>,
+    ret_value: ValueId,
+    bad_instructions: &mut Vec<InstructionId>,
+    function: &Function,
+) -> bool {
+    let _tag = tags_map.get(&ret_value).unwrap().0; 
+    let instruction_id = tags_map.get(&ret_value).unwrap().1; 
+    if instruction_id.is_some(){
+        function.dfg[instruction_id.unwrap()].for_each_value(|value_id| {
+            if tags_map.get(&value_id).is_some() && tags_map.get(&value_id).unwrap().0 == Visibility::Private   {
+                if tags_map_analysis(tags_map, value_id, bad_instructions, function) == true{
+                    println!("debug print bad instruction {:?}",instruction_id.unwrap());
+                    bad_instructions.push(instruction_id.unwrap());
+                }
+            } 
+        });
+        return false;
+    } else {
+        return true;
+    }
+ 
+}
+
 
 // only for debug purposes
 fn tags_map_pretty_printer(
-    tags_map: &BTreeMap<ValueId,Visibility>,
+    tags_map: &BTreeMap<ValueId,(Visibility,Option<InstructionId>)>,
     function: &Function,
 ){
     println!("============TAGS MAP==============");
     for tag in tags_map{
-        if *tag.1 != Visibility::Private {
-            println!("{} - {:?} - {}", tag.0, function.dfg.type_of_value((*tag.0).clone()),tag.1);
+        if tag.1.0 != Visibility::Private {
+            println!("{} - {:?} - {}", tag.0, function.dfg.type_of_value((*tag.0).clone()),tag.1.0);
         } else {
             println!("{} - {:?} - priv", tag.0, function.dfg.type_of_value((*tag.0).clone()));
         }
