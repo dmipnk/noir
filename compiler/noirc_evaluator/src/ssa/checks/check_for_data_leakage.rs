@@ -50,19 +50,12 @@ fn check_for_data_leakage_within_function(
 
     let instructions = function.dfg[function.entry_block()].instructions();
     println!("dbg print: instructions {:?}",instructions);
-    // TODO: 1) fix multiple warnings without flag
-    // 2) add assert instruction analysis 
-    // 3) handle case when return value is none 
-    // WARN: something may go wrong because of the unwrap (if function returns nothing, should test)
-    //  removed function.dfg.resolve and made it straightforward
-    //  when i incorrectly use poseidon permutations function return of main is none
-    //  and i get panic 
     // BUG: makearray instruction hasn't call stack 
     // fn main(x: u16) -> pub [u16; 5] {
     //     let arr = [x;5];
     //     arr
     // }
-    // when we have simple return tags_map_analysis don't insert terminator instruction
+    // when we have simple return tags_map_analysis doesn't insert terminator instruction
     // so we need helper flag
     let mut terminator_flag = false;
     for ret_val in function.returns().unwrap().iter(){
@@ -80,7 +73,6 @@ fn check_for_data_leakage_within_function(
         let mut prev_instr: InstructionId = bad_instr[0];
         let mut flag = false;
         for instruction in bad_instr.iter(){
-            println!("dbg print bad_instr {:?}",instruction);
             if *instruction == prev_instr && flag==true {continue;}
             let call_stack = function.dfg.get_instruction_call_stack(*instruction);
             if call_stack.is_empty() {continue;}
@@ -266,7 +258,6 @@ fn make_tags_map(
             instruction_arguments_and_results.push(value_id); 
         });
         // And all results
-        // println!("instruction results ");
         for value_id in function.dfg.instruction_results(*instruction).iter() {
         // NOTE: there was function.dfg.resolve
             println!("instruction result {} - {:?}", *value_id, function.dfg.type_of_value(*value_id));
@@ -309,14 +300,15 @@ fn blackbox_function_analysis(
         // TODO: keccak poseidon
         BlackBoxFunc::Blake3 |
         BlackBoxFunc::Blake2s |
-        BlackBoxFunc::Sha256Compression |
-        // NOTE: keccak and poseidon are inreversible 
-        BlackBoxFunc::Keccakf1600 |
-        BlackBoxFunc::Poseidon2Permutation => {
+        BlackBoxFunc::Sha256Compression => {
             // TODO: use entropy analyzer in far future
             return Visibility::Public
         },
-        // NOTE: very primitive logic (if smth is private then result is private)
+        // NOTE: keccakf1600 and poseidon2perm are reversible 
+        BlackBoxFunc::Keccakf1600 |
+        BlackBoxFunc::Poseidon2Permutation => {
+            return tags_map.get(&arguments[0]).unwrap().0;
+        }
         // TODO: handle all cases when implement a more detailed version
         BlackBoxFunc::EmbeddedCurveAdd => {
             // NOTE: dont know anything about pedantic solving flag
@@ -369,7 +361,6 @@ fn tags_map_analysis (
         function.dfg[instruction_id.unwrap()].for_each_value(|value_id| {
             if tags_map.get(&value_id).is_some() && tags_map.get(&value_id).unwrap().0 == Visibility::Private   {
                 if tags_map_analysis(tags_map, value_id, bad_instructions, function) == true{
-                    println!("debug print bad instruction {:?}",instruction_id.unwrap());
                     bad_instructions.push(instruction_id.unwrap());
                 }
             } 
