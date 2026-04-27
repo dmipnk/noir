@@ -1,0 +1,6 @@
+[package]
+name = "array_get_priv_index"
+type = "bin"
+authors = [""]
+
+[dependencies]

@@ -1,0 +1,6 @@
+[package]
+name = "add_const"
+type = "bin"
+authors = [""]
+
+[dependencies]

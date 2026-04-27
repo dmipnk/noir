@@ -41,6 +41,7 @@ fn main() -> Result<(), String> {
     generate_compile_failure_tests(&mut test_file, &test_dir);
     generate_data_privacy_violation_tests(&mut test_file, &test_dir);
     generate_data_privacy_compliance_tests(&mut test_file, &test_dir);
+    generate_entropy_tests(&mut test_file, &test_dir);
 
     generate_minimal_execution_success_tests(&mut test_file, &test_dir);
     generate_interpret_execution_success_tests(&mut test_file, &test_dir);
@@ -867,6 +868,47 @@ fn generate_data_privacy_compliance_tests(test_file: &mut File, test_data_dir: &
                 nargo.assert().success();
                 nargo.assert().stderr(predicate::str::contains("There is a data leak").not());
             "#,
+            &MatrixConfig::default(),
+        );
+    }
+    writeln!(test_file, "}}").unwrap();
+}
+
+fn generate_entropy_tests(test_file: &mut File, test_data_dir: &Path) {
+    let test_type = "entropy_violation";
+    let test_cases = read_test_cases(test_data_dir, test_type);
+
+    writeln!(
+        test_file,
+        "mod {test_type} {{
+        use super::*;
+    "
+    )
+    .unwrap();
+
+    for (test_name, test_dir) in test_cases {
+        let test_dir_display = test_dir.display();
+        let entropy_path = test_dir.join("expected_entropy.txt");
+        let expected_entropy = fs::read_to_string(&entropy_path)
+            .expect(&format!("Missing expected_entropy.txt in {}", test_dir.display()))
+            .trim()
+            .to_string();
+        let assertion = format!(
+            r#"
+            nargo.assert().success();
+            nargo.assert().stderr(
+                predicate::str::contains("There is a data leak")
+                    .and(predicate::str::contains("Entropy: {}"))
+            );
+            "#,
+            expected_entropy
+        );
+        generate_test_cases(
+            test_file,
+            &test_name,
+            &test_dir_display,
+            "compile",
+            &assertion,
             &MatrixConfig::default(),
         );
     }

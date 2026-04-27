@@ -1,0 +1,6 @@
+[package]
+name = "div_const_secret"
+type = "bin"
+authors = [""]
+
+[dependencies]

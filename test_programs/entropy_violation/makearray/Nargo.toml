@@ -1,0 +1,6 @@
+[package]
+name = "makearray"
+type = "bin"
+authors = [""]
+
+[dependencies]

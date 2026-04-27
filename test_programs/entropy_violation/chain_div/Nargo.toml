@@ -1,0 +1,6 @@
+[package]
+name = "chain_div"
+type = "bin"
+authors = [""]
+
+[dependencies]

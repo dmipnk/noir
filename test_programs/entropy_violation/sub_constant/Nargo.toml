@@ -1,0 +1,6 @@
+[package]
+name = "sub_constant"
+type = "bin"
+authors = [""]
+
+[dependencies]

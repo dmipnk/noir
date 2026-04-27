@@ -1,0 +1,6 @@
+[package]
+name = "xor_mask"
+type = "bin"
+authors = [""]
+
+[dependencies]

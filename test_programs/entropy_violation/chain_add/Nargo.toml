@@ -1,0 +1,6 @@
+[package]
+name = "chain_add"
+type = "bin"
+authors = [""]
+
+[dependencies]

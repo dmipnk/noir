@@ -1,0 +1,6 @@
+[package]
+name = "and_mask"
+type = "bin"
+authors = [""]
+
+[dependencies]

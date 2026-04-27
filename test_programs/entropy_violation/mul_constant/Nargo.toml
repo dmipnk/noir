@@ -1,0 +1,6 @@
+[package]
+name = "mul_constant"
+type = "bin"
+authors = [""]
+
+[dependencies]

@@ -1,0 +1,6 @@
+[package]
+name = "truncate"
+type = "bin"
+authors = [""]
+
+[dependencies]

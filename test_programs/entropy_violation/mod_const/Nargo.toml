@@ -1,0 +1,6 @@
+[package]
+name = "mod_const"
+type = "bin"
+authors = [""]
+
+[dependencies]
