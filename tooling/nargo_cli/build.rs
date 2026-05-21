@@ -875,7 +875,7 @@ fn generate_data_privacy_compliance_tests(test_file: &mut File, test_data_dir: &
 }
 
 fn generate_entropy_tests(test_file: &mut File, test_data_dir: &Path) {
-    let test_type = "entropy_violation";
+    let test_type = "data_privacy_estimate_bits_tests";
     let test_cases = read_test_cases(test_data_dir, test_type);
 
     writeln!(
@@ -898,7 +898,7 @@ fn generate_entropy_tests(test_file: &mut File, test_data_dir: &Path) {
             nargo.assert().success();
             nargo.assert().stderr(
                 predicate::str::contains("There is a data leak")
-                    .and(predicate::str::contains("Entropy: {}"))
+                    .and(predicate::str::contains("estimate_bits: {}"))
             );
             "#,
             expected_entropy

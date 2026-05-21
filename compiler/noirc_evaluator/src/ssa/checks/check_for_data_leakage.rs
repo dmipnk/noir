@@ -1,4 +1,6 @@
 use acvm::acir::circuit::black_box_functions::BlackBoxFunc;
+use noirc_errors::Span;
+use noirc_errors::Location;
 use noirc_errors::call_stack::CallStack;
 use crate::ssa::ir::integer::IntegerConstant;
 use crate::ssa::ir::instruction::BinaryOp;
@@ -15,6 +17,7 @@ use noirc_frontend::Type;
 use crate::ssa::ir::types::Type as ssa_Type;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
+use std::collections::HashMap;
 use std::cmp::min;
 
 impl Ssa{
@@ -22,13 +25,7 @@ impl Ssa{
     pub(crate) fn check_for_data_leakage(
         &mut self,
     ) -> Vec<SsaReport>{
-        // TODO: make correct processing of optional value
-        // if self.function_signatures.is_none() {
-        //     std::process::exit(1);
-        // }
         let func_sigs = &self.function_signatures.clone().unwrap();
-        println!("dbg print: ssa in cfdl {}\n", self);
-        println!("signatures in check_for_data_leakage dbg print {:?}\n",func_sigs);
         self.normalize_ids();
         self.functions
             .values()
@@ -64,6 +61,7 @@ impl ValueInfo {
     }
 }
 
+
 fn check_for_data_leakage_within_function(
     function: &Function,
     func_sig: &FunctionSignature,
@@ -71,18 +69,12 @@ fn check_for_data_leakage_within_function(
 
     let mut warnings: Vec<SsaReport> = Vec::new();
 
+
     let tags_map = make_tags_map(function, function.entry_block(), func_sig);
     tags_map_pretty_printer(&tags_map, function);
     let mut bad_instr: Vec<InstructionId> = Vec::new();
-    println!("function returns {:?}\n",function.returns());
 
     let instructions = function.dfg[function.entry_block()].instructions();
-    println!("dbg print: instructions {:?}",instructions);
-    // BUG: makearray instruction hasn't call stack 
-    // fn main(x: u16) -> pub [u16; 5] {
-    //     let arr = [x;5];
-    //     arr
-    // }
     // when we have simple return tags_map_analysis doesn't insert terminator instruction
     // so we need helper flag
     let mut terminator_flag = false;
@@ -92,82 +84,90 @@ fn check_for_data_leakage_within_function(
         }
         let result = tags_map.get(ret_val).expect("error occured, there is no value in tags map with such id");
         if (result.vis == Visibility::Private) ||
-            (result.entropy <= 64 && result.entropy > 0) { //think about treshold
+            (result.entropy <= 80 && result.entropy > 0) {
             tags_map_analysis(&tags_map, ret_val.clone(),&mut bad_instr, function);
             terminator_flag = true;        
                 
         }
     }
-    if !bad_instr.is_empty(){
-        bad_instr.sort();
+    let mut all_locations = Vec::new();
+    let mut seen_locations = HashSet::new();
+    let mut final_entropies = Vec::new();
+    let mut final_private_values = Vec::new();  // Vec<Vec<String>>
 
-        let mut grouped: BTreeMap<CallStack, InstructionId> = BTreeMap::new();
+    if !bad_instr.is_empty() {
+        bad_instr.sort();
+        let mut grouped: BTreeMap<CallStack, (InstructionId, CallStack)> = BTreeMap::new();
         for &instr_id in &bad_instr {
             let call_stack = function.dfg.get_instruction_call_stack(instr_id);
-            if call_stack.is_empty() {
-                continue;
-            }
-            grouped.insert(call_stack, instr_id);
+            if call_stack.is_empty() { continue; }
+            let normalized = normalize_call_stack(&call_stack);
+            grouped.entry(normalized).or_insert_with(|| (instr_id, call_stack));
         }
-        // TODO: fix duplicate instruction that are caused by different locations
-        for (call_stack, instr_id) in &grouped {
-            println!("dbg print CALL STACK {:?}",call_stack);
-            let results = function.dfg.instruction_results(*instr_id);
-            if results.is_empty() {
-                continue;
-            }
-            let res_id = results[0];
-            if let Some(info) = tags_map.get(&res_id) {
-                let private_values: Vec<String> = info.priv_vals.as_ref()
-                    .map(|set| {
-                        let mut ids: Vec<ValueId> = set.iter().copied().collect();
-                        ids.sort();
-                        ids.into_iter().map(|id| format!("{}", id)).collect()
 
-                    }).unwrap_or_default();
-                warnings.push(SsaReport::Bug(InternalBug::DataLeak {
-                    call_stack: call_stack.clone(),
-                    entropy: info.entropy,
-                    private_values,
-                }));
+        for (_, (instr_id, original_stack)) in &grouped {
+            for loc in original_stack.iter() {
+                let normalized_loc = Location {
+                    span: Span::inclusive(loc.span.start(), loc.span.start()),
+                    file: loc.file,
+                };
+                if seen_locations.insert(normalized_loc) {
+                    all_locations.push(loc.clone());
+                }
             }
         }
     }
-   if terminator_flag {
-        if let Some(terminator) = function.dfg[function.entry_block()].terminator() {
-            let call_stack = function.dfg.get_call_stack(terminator.call_stack());
-            let mut entropy = 0;
-            let mut private_values = Vec::new();
-            for ret_val in function.returns().unwrap().iter() {
-                if let Some(info) = tags_map.get(ret_val) {
-                    entropy = info.entropy;
-                    private_values = info
-                        .priv_vals
-                        .as_ref()
-                        .map(|set| {
-                        let mut ids: Vec<ValueId> = set.iter().copied().collect();
-                        ids.sort();
-                        ids.into_iter().map(|id| format!("{}", id)).collect()
 
-                    }).unwrap_or_default();
-                    break;
+    if terminator_flag {
+        if let Some(terminator) = function.dfg[function.entry_block()].terminator() {
+            let term_call_stack = function.dfg.get_call_stack(terminator.call_stack());
+            for loc in term_call_stack.iter() {
+                let normalized_loc = Location {
+                    span: Span::inclusive(loc.span.start(), loc.span.start()),
+                    file: loc.file,
+                };
+                if seen_locations.insert(normalized_loc) {
+                    all_locations.push(loc.clone());
                 }
             }
-            warnings.push(SsaReport::Bug(InternalBug::DataLeak {
-                call_stack,
-                entropy,
-                private_values,
-            }));
+
+            for ret_val in function.returns().unwrap().iter() {
+                if let Some(info) = tags_map.get(ret_val) {
+                    final_entropies.push(info.entropy);
+                    let priv_strings = info.priv_vals.as_ref()
+                        .map(|set| {
+                            let mut ids: Vec<ValueId> = set.iter().copied().collect();
+                            ids.sort();
+                            ids.into_iter().map(|id| format!("{}", id)).collect()
+                        })
+                        .unwrap_or_default();
+                    final_private_values.push(priv_strings);
+                }
+            }
         }
+    }
+
+    if !all_locations.is_empty() {
+        warnings.push(SsaReport::Bug(InternalBug::DataLeak {
+            call_stack: all_locations,
+            entropy: final_entropies,
+            private_values: final_private_values,
+        }));
     }
     warnings
 }
 
-
+fn normalize_call_stack(call_stack: &CallStack) -> CallStack {
+    call_stack.iter().map(|loc| {
+        let start = loc.span.start(); 
+        Location {
+            span: Span::inclusive(start, start),
+            file: loc.file,
+        }
+    }).collect()
+}
 
 // analyse instruction and set a tag to result value, add tag in variable tags map
-// TODO: think about efficiency and difference between vec and btreeset in this case
-// TODO: rewrite without Function if it is possible (get it through dfg and instruction_id)
 fn add_result_tag(
     function: &Function,
     instruction: &Instruction,
@@ -177,13 +177,9 @@ fn add_result_tag(
 ){
     match instruction{
         Instruction::Binary(..) => {
-            //debug printers
-            println!("{:?}",*instruction);
-            println!("{:?}",ids_vec);
             let arg1 = ids_vec[0];
             let arg2 = ids_vec[1];
             let res = ids_vec[2];
-            println!("add_result_tag dbg print binary instr res {:?}",function.dfg.get_value_max_num_bits(res));
             if function.dfg.get_numeric_constant(arg1).is_some(){
                 tags_map.insert(arg1, ValueInfo::new(Visibility::Public,None,0,None));
             }
@@ -202,8 +198,6 @@ fn add_result_tag(
         Instruction::Cast(..)
         | Instruction::Not(..)
         | Instruction::Truncate { .. } => {
-            println!("{:?}",*instruction);
-            println!("{:?}",ids_vec);
             let arg = ids_vec[0];
             if function.dfg.get_numeric_constant(arg).is_some(){
                 tags_map.insert(arg, ValueInfo::new(Visibility::Public,None,0,None));
@@ -213,10 +207,7 @@ fn add_result_tag(
             let (entropy, priv_vals) = calculate_entropy(function,res,instruction, &vec![tag],&vec![arg],tags_map);
             tags_map.insert(res, ValueInfo::new(tag.vis,Some(instruction_id),entropy,priv_vals));
         },
-        // TODO: think about private index (if it is private then res is private too?)
         Instruction::ArrayGet { .. } => {
-            println!("{:?}",*instruction);
-            println!("{:?}",ids_vec);
             let arr = ids_vec[0];
             let _ind = ids_vec[1];
             if function.dfg.get_numeric_constant(_ind).is_some() {
@@ -228,12 +219,7 @@ fn add_result_tag(
             let (entropy, priv_vals) = calculate_entropy(function,res,instruction, &vec![tag,ind_tag],&vec![arr,_ind],tags_map);
             tags_map.insert(res,ValueInfo::new(tag.vis,Some(instruction_id),entropy,priv_vals));
         }
-        // TODO: think about private index
-        // for easier logic result tag only depends on insert value 
-        // visibility
         Instruction::ArraySet {..} => {
-            println!("{:?}",*instruction);
-            println!("{:?}",ids_vec);
             let arr = ids_vec[0];
             let _ind = ids_vec[1];
             let val = ids_vec[2];
@@ -254,12 +240,9 @@ fn add_result_tag(
 
         }
         Instruction::MakeArray { .. } => {
-            println!("{:?}",*instruction);
-            println!("{:?}",ids_vec);
             let mut vis = Visibility::Public;
             let elem_ids = &ids_vec[0..ids_vec.len()-1];
             for element in elem_ids {
-                println!("dbg print in makearray element: {} - {:?}",element,function.dfg.type_of_value(*element));
                 if tags_map.get(element).is_none() {
                    if function.dfg.get_numeric_constant(*element).is_some() {
                         tags_map.insert(*element,ValueInfo::new(Visibility::Public,None,0,None));
@@ -275,20 +258,16 @@ fn add_result_tag(
             tags_map.insert(ids_vec[ids_vec.len()-1], ValueInfo::new(vis,Some(instruction_id),entropy,priv_vals));
         }
         Instruction::Call { .. } => {
-            println!("{:?}",*instruction);
-            println!("{:?}",ids_vec);
             let function_value = &function.dfg[ids_vec[0]];
-            println!("dbg print function value: {:?}\n", function_value);
             match function_value {
                 Value::Intrinsic (intrinsic) => {
-                    println!("dbg print intrinsic {:?}\n", intrinsic);
                     match intrinsic {
                         Intrinsic::BlackBox( blackbox_func ) => {
-                            println!("dbg print: ids vec in call instruction {:?} \n", ids_vec);     
                             let ids_vec_len = ids_vec.len();
                             let res_info = blackbox_function_analysis(function,blackbox_func, &ids_vec[1..ids_vec_len-1],ids_vec[ids_vec_len-1], tags_map);
                             tags_map.insert(ids_vec[ids_vec.len()-1],ValueInfo::new(res_info.0,Some(instruction_id),res_info.1,res_info.2));
                         },
+                        Intrinsic::ToRadix(..) |
                         Intrinsic::ToBits(..) => {
                             let arg_info = tags_map.get(&ids_vec[1]).unwrap();
                             tags_map.insert(ids_vec[ids_vec.len()-1],ValueInfo::new(arg_info.vis,Some(instruction_id),arg_info.entropy,arg_info.priv_vals.clone()));
@@ -299,17 +278,12 @@ fn add_result_tag(
                        }
                     }
                 },
-                _ => {
-                    println!("value of function nor intrinsic \n");
-                }
+                _ => {}
                 
             }
             
         }
-        _ => {
-            println!("{:?} \n",*instruction);
-            println!("{:?} \n",ids_vec);
-        }
+        _ => {}
     }
 }
 
@@ -322,7 +296,6 @@ fn add_main_args_in_tags_map(
 
     let mut args= Vec::new();
 
-    // TODO: cover all cases
     for param in &func_sig.0{
         match &param.1 {
             // user structure parsing
@@ -336,18 +309,13 @@ fn add_main_args_in_tags_map(
         }
     }
 
-    println!("dbg print args vector {:?}\n",args);
 
     for (metadata,id) in (args).iter().zip(function.parameters()){
-        println!("add_main_args_in_tags_map dbg print: TYPE of Args {:?}\n",metadata.1);
         let mut entropy: u64 = 0;
         if metadata.0 == Visibility::Private {
-            println!("add_main_args_in_tags_map type {:?}",metadata.0);
             let ssa_typ =function.dfg.type_of_value(*id);
             entropy = calculate_bitwidth(ssa_typ);
         }
-        println!("add_main_args_in_tags_map dbg print: pseudo entropy {:?}",entropy);
-        println!("add_main_args_in_tags_map dbg print: type {:?}",function.dfg.type_of_value(*id));
         tags_map.insert(*id,ValueInfo::new(metadata.0,None,entropy,None));
     }
 }
@@ -366,23 +334,14 @@ fn make_tags_map(
 
     add_main_args_in_tags_map(&mut tags, func_sig,function);
 
-    println!("dbg print block\n {:?}\n",block);
-    println!("dbg print instructions\n {:?}\n",instructions);
-
     for instruction in instructions.iter() {
         let mut instruction_arguments_and_results = Vec::new();
-        println!("instruction: {:?}", instruction);
         // Insert all instruction arguments
-        println!("========instruction arguments=======");
         function.dfg[*instruction].for_each_value(|value_id| {
-        // NOTE: there was function.dfg.resolve
-            println!("{} - {:?}", value_id, function.dfg.type_of_value(value_id));
             instruction_arguments_and_results.push(value_id); 
         });
         // And all results
         for value_id in function.dfg.instruction_results(*instruction).iter() {
-        // NOTE: there was function.dfg.resolve
-            println!("instruction result {} - {:?}", *value_id, function.dfg.type_of_value(*value_id));
             instruction_arguments_and_results.push(*value_id);
         }
 
@@ -404,10 +363,7 @@ fn blackbox_function_analysis(
     tags_map: &mut BTreeMap<ValueId, ValueInfo>,
 ) -> (Visibility,u64,Option<HashSet<ValueId>>){
    match blackbox_function {
-        // TODO: external safety check for non valid prog design
-        // for example iv private, key is public 
         BlackBoxFunc::AES128Encrypt => {
-            println!("dbg print: arguments of blackbox function\n {:?}", arguments);
             let _input = arguments[0];
             let _iv = arguments[1];
             let key = arguments[2];
@@ -422,11 +378,9 @@ fn blackbox_function_analysis(
                 return (Visibility::Public,entropy,priv_vals)
             } 
         },
-        // TODO: keccak poseidon
         BlackBoxFunc::Blake3 |
         BlackBoxFunc::Blake2s |
         BlackBoxFunc::Sha256Compression => {
-            println!("dbg print: arguments of blackbox function\n {:?}", arguments);
             let vinfo_elems: Vec<&ValueInfo> = arguments.iter().map(|id| tags_map.get(id).unwrap()).collect();
             let (entropy,priv_vals) = calculate_entropy_bbox(function, res_id, blackbox_function, &vinfo_elems, &arguments.to_vec(), tags_map);
             return (Visibility::Public,entropy,priv_vals)
@@ -435,16 +389,11 @@ fn blackbox_function_analysis(
         // NOTE: keccakf1600 and poseidon2perm are reversible 
         BlackBoxFunc::Keccakf1600 |
         BlackBoxFunc::Poseidon2Permutation => {
-            println!("dbg print: arguments of blackbox function\n {:?}", arguments);
             let vinfo_elems: Vec<&ValueInfo> = arguments.iter().map(|id| tags_map.get(id).unwrap()).collect();
             let (entropy,priv_vals) = calculate_entropy_bbox(function, res_id, blackbox_function, &vinfo_elems, &arguments.to_vec(), tags_map);
             return (tags_map.get(&arguments[0]).unwrap().vis,entropy,priv_vals)
         }
-        // TODO: handle all cases when implement a more detailed version
         BlackBoxFunc::EmbeddedCurveAdd => {
-            // NOTE: dont know anything about pedantic solving flag
-            // but since it is numeric constant then it does not affect on result visibility
-
             let mut visibility = Visibility::Public;
             for arg in arguments.iter() {
                 if function.dfg.get_numeric_constant(*arg).is_some() {
@@ -469,7 +418,6 @@ fn blackbox_function_analysis(
             }
             let vinfo_elems: Vec<&ValueInfo> = arguments.iter().map(|id| tags_map.get(id).unwrap()).collect();
             let (entropy,priv_vals) = calculate_entropy_bbox(function, res_id, blackbox_function, &vinfo_elems, &arguments.to_vec(), tags_map);
-            // TODO: consider if we add entropy while public (i think yes)
             if tags_map.get(&scalars).unwrap().vis == Visibility::Private { return (Visibility::Public,entropy,priv_vals) }
             return (tags_map.get(&points).unwrap().vis,entropy,priv_vals)
         },
@@ -482,13 +430,11 @@ fn blackbox_function_analysis(
         }
 
         _ => {
-            println!("other bbox functions");
             return (Visibility::Public,0,None)
         }
     }
 }
 
-// TODO: make it more accurate and use whereever it is needed 
 fn calculate_bitwidth (
     res_type: ssa_Type
 ) -> u64 {
@@ -515,8 +461,6 @@ fn calculate_entropy_bbox (
     tags_map: &BTreeMap<ValueId,ValueInfo>,
 ) -> (u64, Option<HashSet<ValueId>>){     
     let mut res_set = HashSet::<ValueId>::new();
-    println!("calculate_entropy_bbox dbg print vinfo {:?}",vinfo_vec);
-    println!("calculate_entropy_bbox dbg print ids_vec {:?}",ids_vec);
     for (arg, vid) in vinfo_vec.iter().zip(ids_vec) {
         if arg.vis == Visibility::Private {
 
@@ -545,7 +489,6 @@ fn calculate_entropy_bbox (
         BlackBoxFunc::Keccakf1600 |
         BlackBoxFunc::MultiScalarMul | 
         BlackBoxFunc::EmbeddedCurveAdd => {
-            println!("bbox function entropy dbg print vinfo {:?}",vinfo_vec);
             cur_entropy = vinfo_vec.iter().map(|vi| vi.entropy).sum();
             bitsize = calculate_bitwidth(function.dfg.type_of_value(res_id));
             return (min(cur_entropy,bitsize),Some(res_set));
@@ -553,18 +496,12 @@ fn calculate_entropy_bbox (
         _ => {cur_entropy=0}
 
     }
-    println!("calculate_entropy_bbox dbg print priv_vals {:?}",res_set);
     let mut sum_entropy_of_priv_vals = 0;
-    for val in vinfo_vec {
-        if let Some(priv_vals) = val.priv_vals.as_ref() {
-            for priv_id in priv_vals {
-                if let Some(info) = tags_map.get(priv_id) {
-                    sum_entropy_of_priv_vals += info.entropy;
-                }
-            }
+    for priv_id in &res_set {
+        if let Some(info) = tags_map.get(priv_id) {
+            sum_entropy_of_priv_vals += info.entropy;
         }
-    }
-    println!("calculate_entropy_bbox entropy dbg print sum of priv_vals entropy {}",sum_entropy_of_priv_vals);
+    }    
     if sum_entropy_of_priv_vals != 0 {
         return (min(sum_entropy_of_priv_vals,min(bitsize,cur_entropy)),Some(res_set))
     } else {
@@ -578,7 +515,6 @@ fn unique_division_results(c: u128, bit_width: u32) -> u64 {
     if c == 0 {
         return 0;
     }
-    // TODO: fix overflow case
     let possible_max = (2u32).pow(bit_width)-1 ;
     let sqrt_c = (c as f64).sqrt() as u128;
     let estimated = 2 * sqrt_c + 1;
@@ -602,8 +538,6 @@ fn calculate_entropy (
     tags_map: &BTreeMap<ValueId,ValueInfo>,
 ) -> (u64, Option<HashSet<ValueId>>){     
     let mut res_set = HashSet::<ValueId>::new();
-    println!("calculate_entropy dbg print vinfo {:?}",vinfo_vec);
-    println!("calculate_entropy dbg print ids_vec {:?}",ids_vec);
     for (arg, vid) in vinfo_vec.iter().zip(ids_vec) {
         if arg.vis == Visibility::Private {
 
@@ -622,18 +556,65 @@ fn calculate_entropy (
     match instruction {
         Instruction::Binary(_binary) => {
             bitsize = function.dfg.get_value_max_num_bits(res_id) as u64;
-            // let len = vinfo_vec.len().saturating_sub(1);
             // H = min(sum of entropies of priv vals, current entropy, max bit width of the res) 
             match _binary.operator {
                 // that ops are kinda obvious H = H1 + H2
                 // for lt and eq it is work because of final formula 
-                BinaryOp::Add {..} |
-                BinaryOp::Sub {..} |
                 BinaryOp::Eq |
                 BinaryOp::Lt |
-                BinaryOp::Xor | 
-                BinaryOp::Mul { .. } => {
+                BinaryOp::Xor  => {
                     cur_entropy = vinfo_vec[0].entropy + vinfo_vec[1].entropy
+                }
+                BinaryOp::Sub { unchecked } |
+                BinaryOp::Add {unchecked} => {
+                    if unchecked == false {
+                        let c0 = function.dfg.get_integer_constant(ids_vec[0]);
+                        let c1 = function.dfg.get_integer_constant(ids_vec[1]);
+                        // for fields and huge vals
+                        let max_possible_val = if bitsize >= 128 {
+                            u128::MAX 
+                        } else {
+                            1u128 << bitsize
+                        };
+                        cur_entropy = match (c0, c1) {
+                            (Some(con), None) => {
+                               let val = match con { IntegerConstant::Signed { value, .. } => value.abs() as u128, IntegerConstant::Unsigned { value, .. } => value };
+                               min(vinfo_vec[1].entropy,(max_possible_val - val).ilog2() as u64) 
+                            }
+                            (None, Some(con)) => {
+                               let val = match con { IntegerConstant::Signed { value, .. } => value.abs() as u128, IntegerConstant::Unsigned { value, .. } => value };
+                               min(vinfo_vec[0].entropy,(max_possible_val-val).ilog2() as u64) 
+                            }
+                            _ =>  vinfo_vec[0].entropy + vinfo_vec[1].entropy
+                        };
+                    } else {
+                        cur_entropy = vinfo_vec[0].entropy + vinfo_vec[1].entropy
+                    }
+                }
+                BinaryOp::Mul { unchecked } => {
+                    if unchecked == false {
+                        let c0 = function.dfg.get_integer_constant(ids_vec[0]);
+                        let c1 = function.dfg.get_integer_constant(ids_vec[1]);
+                        // for fields and huge vals
+                        let max_possible_val = if bitsize >= 128 {
+                            u128::MAX 
+                        } else {
+                            1u128 << bitsize
+                        };
+                        cur_entropy = match (c0, c1) {
+                            (Some(con), None) => {
+                               let val = match con { IntegerConstant::Signed { value, .. } => value.abs() as u128, IntegerConstant::Unsigned { value, .. } => value };
+                               min(vinfo_vec[1].entropy,((max_possible_val - 1)/val + 1).ilog2() as u64) 
+                            }
+                            (None, Some(con)) => {
+                               let val = match con { IntegerConstant::Signed { value, .. } => value.abs() as u128, IntegerConstant::Unsigned { value, .. } => value };
+                               min(vinfo_vec[0].entropy,((max_possible_val-1)/val + 1).ilog2() as u64) 
+                            }
+                            _ =>  vinfo_vec[0].entropy + vinfo_vec[1].entropy
+                        };
+                    } else {
+                        cur_entropy = vinfo_vec[0].entropy + vinfo_vec[1].entropy
+                    }
                 }
                 // if we know that one of the operands is constant then 
                 // we know that the result is limited by that mask
@@ -662,11 +643,6 @@ fn calculate_entropy (
                             _ => 0
                         };
                     }
-                    println!("calculate_entropy entropy dbg print cur entropy {}",cur_entropy);
-                    // ISSUE: there is logic error, we know constatns in compilitaion time
-                    // but we dont know public inputs and we cant correctly count entropy in
-                    // that case, so when we have public we are gonna consider that the result
-                    // entropy is 0 even it is not 
                 }
 
                 // both priv -> H1+H2
@@ -686,7 +662,6 @@ fn calculate_entropy (
                             (Some(con), None) => {
                                 let val = match con { IntegerConstant::Signed { value, .. } => value.abs() as u128, IntegerConstant::Unsigned { value, .. } => value };
                                 let log = unique_division_results(val, calculate_bitwidth(function.dfg.type_of_value(ids_vec[1])) as u32);
-                                println!("calculate_entropy entropy div entropy {} log {}",vinfo_vec[1].entropy,log);
                                 min(vinfo_vec[1].entropy, log)
                             }
                             (None, Some(con)) => {
@@ -698,13 +673,11 @@ fn calculate_entropy (
                                 };
 
                                 // min(bitwidth - log, entropy)
-                                println!("calculate_entropy entropy div entropy {} log {}",vinfo_vec[0].entropy,log);
                                 min(calculate_bitwidth(function.dfg.type_of_value(res_id)).saturating_sub(log as u64), vinfo_vec[0].entropy)
                             }
                             _ => 0
                         }
                     }
-                    println!("calculate_entropy entropy dbg print cur entropy {}",cur_entropy);
 
                 }
                 // both priv -> H1+H2
@@ -720,9 +693,7 @@ fn calculate_entropy (
                         
                         let c0 = function.dfg.get_integer_constant(ids_vec[0]);
                         let c1 = function.dfg.get_integer_constant(ids_vec[1]);
-                        // else cases -> 0 because of the same "issue"
 
-                        // if C % secret  or secret % C-> then we have no more entropy than C or secret
                         cur_entropy = match (c0, c1) {
                             (Some(con), None) => {
                                 let log = match con { IntegerConstant::Signed { value, .. } => value.abs().ilog2(), IntegerConstant::Unsigned { value, .. } => value.ilog2() };
@@ -732,14 +703,10 @@ fn calculate_entropy (
                                 let log = match con { IntegerConstant::Signed { value, .. } => value.abs().ilog2(), IntegerConstant::Unsigned { value, .. } => value.ilog2()};
                                 min(vinfo_vec[0].entropy, log as u64)
                             }
-                            // else cases -> 0 because of the same "issue"
                             _ => 0
                         }
                     }
-                    println!("calculate_entropy entropy dbg print cur entropy {}",cur_entropy);
                 }
-                // NOTE: i dont really think that this instructions are reachable so i will leave it
-                // for now 
                 BinaryOp::Shr |
                 BinaryOp::Shl => {
 
@@ -755,10 +722,7 @@ fn calculate_entropy (
                         // if secret <</>> C then min(entropty,bitw - shift) 
                         cur_entropy = match (c0, c1) {
                             (None, Some(con)) => {
-                                // TODO: think about negative signed value i guess it cannot happen
-                                // dont really like that code
                                 let val = match con { IntegerConstant::Signed { value, .. } => value.abs() as u128, IntegerConstant::Unsigned { value, .. } => value};
-                                println!("entropy dbg print shifts entropy {} and shift val {}",vinfo_vec[0].entropy,val);
                                 // min(entropy,bitwidth - shift)
                                 vinfo_vec[0].entropy.saturating_sub(val as u64)
                             }
@@ -770,7 +734,6 @@ fn calculate_entropy (
                             _ => 0
                         }
                     }
-                    println!("calculate_entropy entropy dbg print cur entropy {}",cur_entropy);
                 }
                 // or is also working like mask ()
                 BinaryOp::Or => {
@@ -795,21 +758,17 @@ fn calculate_entropy (
                             _ => 0
                         }
                     }
-                    println!("calculate_entropy entropy dbg print cur entropy {}",cur_entropy);
                 }
             }
         },
         Instruction::Truncate { value: _, bit_size, ..} => {
             cur_entropy = vinfo_vec[0].entropy;
             bitsize = *bit_size as u64;
-            println!("entrpy dbg print truncate entropy {} bitsize {}", cur_entropy,bit_size);
-
         }
         Instruction::Not (..) |
         Instruction::Cast (..)=> {
             cur_entropy = vinfo_vec[0].entropy;
             bitsize = function.dfg.get_value_max_num_bits(res_id) as u64;
-            println!("entrpy dbg print not/cast entropy {}", cur_entropy);
         }
         Instruction::ArrayGet { array, index: _ } => {
             bitsize = function.dfg.get_value_max_num_bits(res_id) as u64;
@@ -821,21 +780,20 @@ fn calculate_entropy (
                 _ => {(0,0)}
             };
             let log2_len = len.ilog2() as u64;
-            let min_ent = min(log2_len,vinfo_vec[1].entropy);
+            let min_ent_idx = min(log2_len,vinfo_vec[1].entropy);
+            let min_ent = min(el_bit_width,vinfo_vec[0].entropy);
             cur_entropy = match (vinfo_vec[0].vis,vinfo_vec[1].vis) {
                 // add min(vec entropy, smth)
                 (Visibility::Private, Visibility::Public) |
                 (Visibility::Private, Visibility::Private)=> el_bit_width,
-                (Visibility::Public, Visibility::Private) => min_ent,
+                (Visibility::Public, Visibility::Private) => min_ent_idx,
                 _ => 0
             };
 
         }
-        // TODO: think about logic
         // in the worst case res entropy decreases on bitwidth of element minus value entropy
         Instruction::ArraySet { array, index: _, ..} => {
             bitsize = calculate_bitwidth(function.dfg.type_of_value(res_id));
-            // TODO: fix that primitive shit
             let (el_bit_width,len) = match function.dfg.type_of_value(*array) {
                 ssa_Type::Array(types,len ) => {
                     (types[0].bit_size() as u64,len as u64)
@@ -853,24 +811,15 @@ fn calculate_entropy (
             for el in vinfo_vec{
                 cur_entropy += el.entropy;
             }
-            println!("calculate_entropy dbg print make arr curr entropy {}",cur_entropy);
         }
         _ => {}
     }
-    println!("calculate_entropy dbg print priv_vals {:?}",res_set);
     let mut sum_entropy_of_priv_vals = 0;
-    for val in vinfo_vec {
-        if let Some(priv_vals) = val.priv_vals.as_ref() {
-            for priv_id in priv_vals {
-                if let Some(info) = tags_map.get(priv_id) {
-                    sum_entropy_of_priv_vals += info.entropy;
-                }
-            }
+    for priv_id in &res_set {
+        if let Some(info) = tags_map.get(priv_id) {
+            sum_entropy_of_priv_vals += info.entropy;
         }
-    }
-    println!("calculate_entropy entropy dbg print sum of priv_vals entropy {}",sum_entropy_of_priv_vals);
-    // println!("calculate_entropy entropy dbg print max num bits {} of {:?}",function.dfg.get_value_max_num_bits(res_id),res_id);
-    // println!("calculate_entropy entropy dbg print bitsize {} of {:?} type {:?}",function.dfg.type_of_value(res_id).bit_size(),res_id,function.dfg.type_of_value(res_id));
+    }    
     if sum_entropy_of_priv_vals != 0 {
         return (min(sum_entropy_of_priv_vals,min(bitsize,cur_entropy)),Some(res_set))
     } else {

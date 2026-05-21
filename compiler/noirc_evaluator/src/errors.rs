@@ -135,8 +135,18 @@ impl From<SsaReport> for CustomDiagnostic {
                         ("As a result, the compiled circuit is ensured to fail. Other assertions may also fail during execution".to_string(), call_stack)
                     }
                     InternalBug::DataLeak { call_stack, entropy, private_values } => {
-                        let secondary = format!("Entropy: {} bits, mixed private values: {}", entropy, if private_values.is_empty() { "none".to_string()} else {private_values.join(", ")});
-                        (secondary,call_stack)
+                        // let secondary = format!("Entropy: {} bits, mixed private values: {}", entropy, if private_values.is_empty() { "none".to_string()} else {private_values.join(", ")});
+                        // (secondary,call_stack)
+                        let entropy_str = entropy.iter().map(|e| e.to_string()).collect::<Vec<_>>().join(", ");
+                        let priv_str = private_values.iter()
+                            .map(|v| format!("[{}]", v.join(", ")))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        let secondary = format!(
+                            "There is a data leak (estimate_bits: {} bits, mixed private values: {})",
+                            entropy_str, priv_str
+                        );
+                        (secondary, call_stack)
                     }
                 };
                 let call_stack = vecmap(call_stack, |location| location);
@@ -166,8 +176,8 @@ pub enum InternalBug {
     #[error("There is a data leak")]
     DataLeak {
         call_stack: CallStack,
-        entropy: u64,
-        private_values: Vec<String>,
+        entropy: Vec<u64>,
+        private_values: Vec<Vec<String>>,
     },
 }
 
