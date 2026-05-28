@@ -155,6 +155,10 @@ pub struct CompileOptions {
     #[arg(long)]
     pub skip_data_leakage_check: bool,
 
+    /// Flag to change data leakage estimate_bits threshold
+    #[arg(long)]
+    pub data_leakage_threshold: Option<u64>,
+
     /// Flag to turn off the compiler check for missing Brillig call constraints.
     /// Warning: This can improve compilation speed but can also lead to correctness errors.
     /// This check should always be run on production code.
@@ -256,6 +260,7 @@ impl Default for CompileOptions {
             show_artifact_paths: false,
             skip_underconstrained_check: false,
             skip_data_leakage_check: false,
+            data_leakage_threshold: None,
             skip_brillig_constraints_check: false,
             enable_brillig_debug_assertions: false,
             count_array_copies: false,
@@ -294,6 +299,7 @@ impl CompileOptions {
             emit_ssa: if self.emit_ssa { Some(package_build_path) } else { None },
             skip_underconstrained_check: !self.silence_warnings && self.skip_underconstrained_check,
             skip_data_leakage_check: self.skip_data_leakage_check,
+            data_leakage_threshold: self.data_leakage_threshold,
             enable_brillig_constraints_check_lookback: self
                 .enable_brillig_constraints_check_lookback,
             skip_brillig_constraints_check: !self.silence_warnings

@@ -241,6 +241,7 @@ fn ssa_to_acir_program(ssa: Ssa) -> AcirProgram<FieldElement> {
         emit_ssa: { None },
         skip_underconstrained_check: true,
         skip_data_leakage_check: true, // NOTE: well i dont know
+        data_leakage_threshold: None,
         skip_brillig_constraints_check: true,
         inliner_aggressiveness: 0,
         constant_folding_max_iter: CONSTANT_FOLDING_MAX_ITER,

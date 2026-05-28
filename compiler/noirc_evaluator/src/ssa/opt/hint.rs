@@ -20,6 +20,7 @@ mod tests {
             emit_ssa: None,
             skip_underconstrained_check: true,
             skip_data_leakage_check: true,
+            data_leakage_threshold: None,
             enable_brillig_constraints_check_lookback: false,
             skip_brillig_constraints_check: true,
             inliner_aggressiveness: 0,

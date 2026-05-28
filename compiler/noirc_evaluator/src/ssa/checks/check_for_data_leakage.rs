@@ -24,6 +24,7 @@ impl Ssa{
 
     pub(crate) fn check_for_data_leakage(
         &mut self,
+        threshold: Option<u64>,
     ) -> Vec<SsaReport>{
         let func_sigs = &self.function_signatures.clone().unwrap();
         self.normalize_ids();
@@ -33,7 +34,7 @@ impl Ssa{
             .map(|pair| (pair.0.id(),pair.1))
             .flat_map(|fid_sig_pair| {
                 let function_to_process = &self.functions[&fid_sig_pair.0];
-                check_for_data_leakage_within_function(function_to_process,fid_sig_pair.1)
+                check_for_data_leakage_within_function(function_to_process,fid_sig_pair.1, threshold)
             })
             .collect()
     }
@@ -65,6 +66,7 @@ impl ValueInfo {
 fn check_for_data_leakage_within_function(
     function: &Function,
     func_sig: &FunctionSignature,
+    threshold: Option<u64>,
 ) -> Vec<SsaReport> {
 
     let mut warnings: Vec<SsaReport> = Vec::new();
@@ -84,7 +86,7 @@ fn check_for_data_leakage_within_function(
         }
         let result = tags_map.get(ret_val).expect("error occured, there is no value in tags map with such id");
         if (result.vis == Visibility::Private) ||
-            (result.entropy <= 80 && result.entropy > 0) {
+            (result.entropy <= threshold.unwrap_or(80) && result.entropy > 0) {
             tags_map_analysis(&tags_map, ret_val.clone(),&mut bad_instr, function);
             terminator_flag = true;        
                 

@@ -97,6 +97,9 @@ pub struct SsaEvaluatorOptions {
     /// Skip the check for data leakage
     pub skip_data_leakage_check: bool,
 
+    /// Data leakage threshold
+    pub data_leakage_threshold: Option<u64>,
+
     /// Skip the missing Brillig call constraints check
     pub skip_brillig_constraints_check: bool,
 
@@ -344,7 +347,7 @@ pub fn optimize_ssa_builder_into_acir(
         ssa_level_warnings.extend(time(
             "After Check for Data Leakage",
             options.print_codegen_timings,
-            || ssa.check_for_data_leakage(),
+            || ssa.check_for_data_leakage(options.data_leakage_threshold),
         ));
     }
 
