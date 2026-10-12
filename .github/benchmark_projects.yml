@@ -1,4 +1,4 @@
-define: &AZ_COMMIT 11d814019e009a34bfaeeb77291469e0acdf3fa7
+define: &AZ_COMMIT bb15fcbbe969f11a892272715fe59f0976b086ca
 projects:
   private-kernel-inner:
     repo: AztecProtocol/aztec-packages
